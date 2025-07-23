@@ -1,6 +1,7 @@
 import { WhisperModel, TranscriptionAction } from '@/hooks/useTranscriptionStore';
 
 // Use environment variable or fallback to localhost for development
+// In Docker, the backend service is accessible via 'backend' hostname
 const API_BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000';
 const WS_BASE_URL = API_BASE_URL.replace('http://', 'ws://').replace('https://', 'wss://');
 

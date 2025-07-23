@@ -144,6 +144,10 @@ ENV/
 env.bak/
 venv.bak/
 
+# Frontend environment
+frontend/.env.local
+frontend/.env.production
+
 # Spyder project settings
 .spyderproject
 .spyproject
@@ -217,3 +221,4 @@ node_modules/
 
 notebooks/
 analysis_requirements.txt
+

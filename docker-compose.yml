@@ -1,5 +1,3 @@
-version: '3.8'
-
 services:
   backend:
     build:
@@ -8,11 +6,16 @@ services:
     ports:
       - "8000:8000"
     volumes:
-      - ./app:/app
+      - ./app:/app/app
       - whisper_models:/app/whisper_models
     environment:
       - PYTHONUNBUFFERED=1
+      - PYTHONPATH=/app
       - WHISPER_MODEL_CACHE_DIR=/app/whisper_models
+      - VBZ_ENABLE_SPEEDUP=true
+      - VBZ_SPEED_SMALL=1.25
+      - VBZ_SPEED_MEDIUM=1.5
+      - VBZ_SPEED_TURBO=1.25
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
       interval: 30s
@@ -33,7 +36,6 @@ services:
       - ./frontend/public:/app/public
       - ./frontend/vite.config.ts:/app/vite.config.ts
     environment:
-      - VITE_API_URL=http://backend:8000
       - CHOKIDAR_USEPOLLING=true
     stdin_open: true
     tty: true
