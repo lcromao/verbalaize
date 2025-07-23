@@ -1,0 +1,50 @@
+version: '3.8'
+
+services:
+  backend:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./app:/app
+      - whisper_models:/app/whisper_models
+    environment:
+      - PYTHONUNBUFFERED=1
+      - WHISPER_MODEL_CACHE_DIR=/app/whisper_models
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+    networks:
+      - verbalaize-network
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    ports:
+      - "3000:3000"
+    volumes:
+      - ./frontend/src:/app/src
+      - ./frontend/public:/app/public
+      - ./frontend/vite.config.ts:/app/vite.config.ts
+    environment:
+      - VITE_API_URL=http://backend:8000
+      - CHOKIDAR_USEPOLLING=true
+    stdin_open: true
+    tty: true
+    depends_on:
+      - backend
+    networks:
+      - verbalaize-network
+
+volumes:
+  whisper_models:
+
+networks:
+  verbalaize-network:
+    driver: bridge

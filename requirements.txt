@@ -1,0 +1,13 @@
+fastapi
+uvicorn[standard]
+python-multipart
+websockets
+openai-whisper
+torch
+torchaudio
+pydantic
+pydantic-settings
+python-dotenv
+pytest
+pytest-asyncio
+httpx
