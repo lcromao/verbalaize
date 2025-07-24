@@ -16,12 +16,18 @@ services:
       - VBZ_SPEED_SMALL=1.25
       - VBZ_SPEED_MEDIUM=1.5
       - VBZ_SPEED_TURBO=1.25
+    deploy:
+      resources:
+        limits:
+          memory: 4G
+        reservations:
+          memory: 2G
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
       interval: 30s
       timeout: 10s
       retries: 3
-      start_period: 40s
+      start_period: 120s  # Increased for model loading
     networks:
       - verbalaize-network
 

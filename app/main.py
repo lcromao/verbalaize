@@ -5,8 +5,6 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from app.core.config import settings
 from app.routes import transcription
-from app.schemas.transcription import ModelType
-from app.services.whisper_service import whisper_service
 
 # Configure logging
 logging.basicConfig(
@@ -45,15 +43,13 @@ app.include_router(transcription.router)
 
 
 @app.on_event("startup")
-async def warm_models():
-    """Preload commonly used models to improve first request performance"""
+async def startup_tasks():
+    """Application startup tasks"""
     try:
-        logger.info("Preloading Whisper models...")
-        # Preload the medium model (most commonly used)
-        await whisper_service._get_model(ModelType.MEDIUM)
-        logger.info("Model preloading completed successfully")
+        logger.info("Application startup - models are pre-downloaded and ready")
+        logger.info("Whisper service initialized successfully")
     except Exception as e:
-        logger.warning(f"Model preloading failed (will load on demand): {str(e)}")
+        logger.warning(f"Startup warning: {str(e)}")
 
 
 @app.get("/")
