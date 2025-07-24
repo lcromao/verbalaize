@@ -23,12 +23,12 @@ COPY ./app /app
 # Create directory for model cache
 RUN mkdir -p /app/whisper_models
 
-# Pre-download all Whisper models during build
+# Pre-download Whisper models one by one to prevent memory issues
 # This prevents downloads during runtime and reduces startup time
-RUN python -c "import whisper; \
-    models = ['tiny', 'base', 'small', 'medium', 'large-v2', 'large-v3']; \
-    [whisper.load_model(model, download_root='/app/whisper_models') for model in models]; \
-    print('All Whisper models downloaded successfully')"
+RUN python -c "import whisper; print('Downloading small model...'); whisper.load_model('small', download_root='/app/whisper_models'); print('Small model downloaded')"
+RUN python -c "import whisper; print('Downloading medium model...'); whisper.load_model('medium', download_root='/app/whisper_models'); print('Medium model downloaded')"
+RUN python -c "import whisper; print('Downloading large-v3 model...'); whisper.load_model('large-v3', download_root='/app/whisper_models'); print('Large-v3 model downloaded')"
+RUN echo "All Whisper models downloaded successfully"
 
 # Set Python path
 ENV PYTHONPATH=/app
