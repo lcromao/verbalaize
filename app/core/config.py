@@ -1,9 +1,16 @@
 from typing import Optional
 
-from pydantic_settings import BaseSettings
+from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 class Settings(BaseSettings):
+    model_config = SettingsConfigDict(
+        env_file=".env",
+        case_sensitive=False,
+        env_prefix="vbz_",
+        extra="ignore",  # Permite variáveis extras sem erro
+    )
+
     app_name: str = "Verbalaize - Audio Transcription Service"
     app_version: str = "1.0.0"
     debug: bool = True
@@ -13,6 +20,12 @@ class Settings(BaseSettings):
 
     # Whisper configuration
     whisper_model_cache_dir: str = "./whisper_models"
+
+    # VerbAIze specific settings (speedup features)
+    enable_speedup: bool = False
+    speed_small: float = 1.25
+    speed_medium: float = 1.5
+    speed_turbo: float = 1.25
 
     # File upload settings
     max_file_size: int = 100 * 1024 * 1024  # 100MB
@@ -52,10 +65,6 @@ class Settings(BaseSettings):
     # Real-time transcription settings
     realtime_chunk_duration: int = 5  # seconds
     realtime_sample_rate: int = 16000
-
-    class Config:
-        env_file = ".env"
-        case_sensitive = False
 
 
 settings = Settings()
