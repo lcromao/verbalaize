@@ -14,7 +14,7 @@ dist/
 downloads/
 eggs/
 .eggs/
-# lib/
+lib/
 # Uncommented to ensure frontend/src/lib/utils.ts is tracked
 # This file is essential for shadcn/ui components
 lib64/

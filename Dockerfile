@@ -1,44 +1,45 @@
-# Use Python slim image for smaller size
-FROM python:3.10-slim
+# Stage 1: Build the frontend
+FROM node:20-alpine AS builder-frontend
 
-# Set working directory
+WORKDIR /app/frontend
+
+# Copy package manifests and install dependencies
+COPY frontend/package.json frontend/bun.lockb* ./
+RUN npm install
+
+# Copy the rest of the frontend source code
+COPY frontend/ .
+
+# Build the frontend
+# Ensure missing utils.ts exists (idempotent) before building
+RUN mkdir -p src/lib \
+    && printf "import { type ClassValue, clsx } from \"clsx\"\nimport { twMerge } from \"tailwind-merge\"\n\nexport function cn(...inputs: ClassValue[]) {\n  return twMerge(clsx(inputs))\n}\n" > src/lib/utils.ts \
+    && npm run build
+
+# Stage 2: Build the final image with backend and frontend artifacts
+FROM python:3.10-slim AS final
+
+# Install ffmpeg, a dependency for Whisper
+RUN apt-get update && apt-get install -y --no-install-recommends ffmpeg && \
+    rm -rf /var/lib/apt/lists/*
+
 WORKDIR /app
 
-# Install system dependencies
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    ffmpeg \
-    git \
-    curl \
-    && rm -rf /var/lib/apt/lists/*
-
-# Copy requirements first for better layer caching
-COPY requirements.txt .
-
-# Install Python dependencies
-RUN pip install --no-cache-dir -r requirements.txt
-
-# Copy application code
-COPY ./app /app
-
-# Create directory for model cache
+# Create the directory for Whisper models
 RUN mkdir -p /app/whisper_models
 
-# Pre-download Whisper models one by one to prevent memory issues
-# This prevents downloads during runtime and reduces startup time
-RUN python -c "import whisper; print('Downloading small model...'); whisper.load_model('small', download_root='/app/whisper_models'); print('Small model downloaded')"
-RUN python -c "import whisper; print('Downloading medium model...'); whisper.load_model('medium', download_root='/app/whisper_models'); print('Medium model downloaded')"
-RUN python -c "import whisper; print('Downloading large-v3 model...'); whisper.load_model('large-v3', download_root='/app/whisper_models'); print('Large-v3 model downloaded')"
-RUN echo "All Whisper models downloaded successfully"
+# Install Python dependencies
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
 
-# Set Python path
-ENV PYTHONPATH=/app
+# Copy the backend application code
+COPY app/ ./app
 
-# Expose port
+# Copy the built frontend from the builder stage
+COPY --from=builder-frontend /app/frontend/dist ./frontend/dist
+
+# Expose the port the app runs on
 EXPOSE 8000
 
-# Health check
-HEALTHCHECK --interval=30s --timeout=30s --start-period=5s --retries=3 \
-    CMD curl -f http://localhost:8000/health || exit 1
-
-# Run the application
-CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000"]
+# Command to run the application - FIXED: use 0.0.0.0 instead of 127.0.0.1
+CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]

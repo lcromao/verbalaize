@@ -1,58 +1,16 @@
 services:
-  backend:
+  verbalaize:
     build:
       context: .
       dockerfile: Dockerfile
     ports:
       - "8000:8000"
     volumes:
-      - ./app:/app/app
-      - whisper_models:/app/whisper_models
+      - ./whisper_models:/app/whisper_models
+      - whisper_cache:/root/.cache/whisper  # Persist model cache
     environment:
-      - PYTHONUNBUFFERED=1
-      - PYTHONPATH=/app
-      - WHISPER_MODEL_CACHE_DIR=/app/whisper_models
-      - VBZ_ENABLE_SPEEDUP=true
-      - VBZ_SPEED_SMALL=1.25
-      - VBZ_SPEED_MEDIUM=1.5
-      - VBZ_SPEED_TURBO=1.25
-    deploy:
-      resources:
-        limits:
-          memory: 6G
-        reservations:
-          memory: 2G
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-      start_period: 120s  # Increased for model loading
-    networks:
-      - verbalaize-network
-
-  frontend:
-    build:
-      context: ./frontend
-      dockerfile: Dockerfile
-    ports:
-      - "3000:3000"
-    volumes:
-      - ./frontend/src:/app/src
-      - ./frontend/public:/app/public
-      - ./frontend/vite.config.ts:/app/vite.config.ts
-    environment:
-      - CHOKIDAR_USEPOLLING=true
-    stdin_open: true
-    tty: true
-    depends_on:
-      - backend
-    networks:
-      - verbalaize-network
+      - VBZ_DEBUG=True
+    command: uvicorn app.main:app --host 0.0.0.0 --port 8000
 
 volumes:
-  whisper_models:
-
-networks:
-  verbalaize-network:
-    driver: bridge
+  whisper_cache:  # Named volume for Whisper model cache

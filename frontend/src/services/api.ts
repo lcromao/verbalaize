@@ -1,9 +1,14 @@
 import { WhisperModel, TranscriptionAction } from '@/hooks/useTranscriptionStore';
 
-// Use environment variable or fallback to localhost for development
-// In Docker, the backend service is accessible via 'backend' hostname
-const API_BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000';
-const WS_BASE_URL = API_BASE_URL.replace('http://', 'ws://').replace('https://', 'wss://');
+// Resolve API base URL:
+// - Prefer VITE_API_URL when provided at build time
+// - Otherwise use the current page origin (same-origin requests avoid CORS/mismatch localhost vs 127.0.0.1)
+const API_BASE_URL = (import.meta.env.VITE_API_URL && import.meta.env.VITE_API_URL.trim())
+  ? import.meta.env.VITE_API_URL.trim()
+  : window.location.origin;
+
+// Derive WS base URL from current location to avoid mixed origin issues
+const WS_BASE_URL = `${window.location.protocol === 'https:' ? 'wss' : 'ws'}://${window.location.host}`;
 
 export interface TranscriptionResponse {
   model: string;

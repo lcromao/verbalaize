@@ -11,7 +11,11 @@ import whisper
 from fastapi import HTTPException, UploadFile
 
 from app.core.config import settings
-from app.schemas.transcription import ActionType, ModelType, TranscriptionResponse
+from app.schemas.transcription import (
+    ActionType,
+    ModelType,
+    TranscriptionResponse,
+)
 
 # Suppress FP16 warnings on CPU
 warnings.filterwarnings("ignore", message="FP16 is not supported on CPU")
@@ -20,10 +24,22 @@ logger = logging.getLogger(__name__)
 
 
 class WhisperService:
+    _instance = None
+    _lock = asyncio.Lock()
+
+    def __new__(cls):
+        if cls._instance is None:
+            cls._instance = super().__new__(cls)
+        return cls._instance
+
     def __init__(self):
+        if hasattr(self, "_initialized"):
+            return
         self._models: Dict[str, Any] = {}
         self._locks = defaultdict(asyncio.Lock)
         self.device = "cuda" if torch.cuda.is_available() else "cpu"
+        self._initialized = True
+        logger.info(f"WhisperService initialized with device: {self.device}")
 
     async def _load_model_blocking(self, model_name: str) -> Any:
         """Load Whisper model in executor to avoid blocking event loop"""
@@ -41,9 +57,9 @@ class WhisperService:
         """Load and cache Whisper model with async loading and locking"""
         model_name = model_type.value
 
-        # Map turbo to large-v3 for better performance
+        # Map turbo to medium for memory efficiency (large-v3 is too big)
         if model_name == "turbo":
-            model_name = "large-v3"
+            model_name = "turbo"
 
         # Check if model is already loaded
         if model_name not in self._models:
@@ -56,12 +72,16 @@ class WhisperService:
                         logger.info(
                             f"Loading Whisper model '{model_name}' for first time..."
                         )
-                        self._models[model_name] = await self._load_model_blocking(
+                        self._models[
                             model_name
+                        ] = await self._load_model_blocking(model_name)
+                        logger.info(
+                            f"Successfully loaded Whisper model '{model_name}'"
                         )
-                        logger.info(f"Successfully loaded Whisper model '{model_name}'")
                     except Exception as e:
-                        logger.error(f"Failed to load model {model_name}: {str(e)}")
+                        logger.error(
+                            f"Failed to load model {model_name}: {str(e)}"
+                        )
                         raise HTTPException(
                             status_code=500,
                             detail=f"Failed to load model {model_name}: {str(e)}",
@@ -133,7 +153,9 @@ class WhisperService:
             file_extension = f".{file.filename.split('.')[-1].lower()}"
 
         # Check content type first, then fallback to file extension
-        is_valid_content_type = file.content_type in settings.allowed_file_types
+        is_valid_content_type = (
+            file.content_type in settings.allowed_file_types
+        )
         is_valid_extension = (
             file_extension in allowed_extensions if file_extension else False
         )
@@ -149,7 +171,9 @@ class WhisperService:
             )
 
         # Create temporary file
-        file_extension = f".{file.filename.split('.')[-1]}" if file.filename else ".wav"
+        file_extension = (
+            f".{file.filename.split('.')[-1]}" if file.filename else ".wav"
+        )
         with tempfile.NamedTemporaryFile(
             delete=False, suffix=file_extension
         ) as temp_file:
@@ -200,7 +224,9 @@ class WhisperService:
             return ""
 
         # Create temporary file for audio chunk
-        with tempfile.NamedTemporaryFile(delete=False, suffix=".webm") as temp_file:
+        with tempfile.NamedTemporaryFile(
+            delete=False, suffix=".webm"
+        ) as temp_file:
             try:
                 temp_file.write(audio_data)
                 temp_file.flush()
@@ -238,5 +264,10 @@ class WhisperService:
                     logger.warning(f"Failed to cleanup temp file: {str(e)}")
 
 
-# Global service instance
+# Global service instance (singleton)
 whisper_service = WhisperService()
+
+
+def get_whisper_service() -> WhisperService:
+    """Get the global WhisperService instance"""
+    return whisper_service

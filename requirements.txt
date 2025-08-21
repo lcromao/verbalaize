@@ -11,3 +11,11 @@ python-dotenv
 pytest
 pytest-asyncio
 httpx
+openai-whisper 
+jiwer 
+ffmpeg-python 
+pandas
+jupyter
+matplotlib
+seaborn
+faster-whisper

@@ -13,7 +13,7 @@ interface TranscriptionState {
 }
 
 export const useTranscriptionStore = create<TranscriptionState>((set) => ({
-  model: 'medium',
+  model: 'turbo',
   action: 'transcribe',
   targetLanguage: 'pt',
   setModel: (model) => set({ model }),

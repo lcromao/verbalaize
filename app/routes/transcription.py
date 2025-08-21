@@ -23,7 +23,7 @@ from app.services.whisper_service import whisper_service
 
 logger = logging.getLogger(__name__)
 
-router = APIRouter(prefix="/api/v1/transcribe", tags=["transcription"])
+router = APIRouter(prefix="/v1/transcribe", tags=["transcription"])
 
 
 @router.post("/upload", response_model=TranscriptionResponse)
@@ -50,7 +50,10 @@ async def transcribe_upload(
 
     try:
         result = await whisper_service.transcribe_file(
-            file=file, model_type=model, action=action, target_language=target_language
+            file=file,
+            model_type=model,
+            action=action,
+            target_language=target_language,
         )
         return result
 
@@ -109,7 +112,11 @@ async def transcribe_realtime(websocket: WebSocket):
                 if "text" in message:
                     logger.info(f"Processing text message from {client_id}")
                     await _handle_text_message(
-                        websocket, message, config_state, client_id, audio_buffer
+                        websocket,
+                        message,
+                        config_state,
+                        client_id,
+                        audio_buffer,
                     )
                 elif "bytes" in message:
                     logger.debug(f"Processing audio bytes from {client_id}")
@@ -153,7 +160,9 @@ async def transcribe_realtime(websocket: WebSocket):
             logger.error(f"Failed to send error message to {client_id}")
     finally:
         # Process any remaining audio in buffer
-        await _process_final_buffer(websocket, audio_buffer, config_state, client_id)
+        await _process_final_buffer(
+            websocket, audio_buffer, config_state, client_id
+        )
         logger.info(f"WebSocket connection closed for {client_id}")
 
 
@@ -170,8 +179,12 @@ async def _handle_text_message(
         logger.info(f"Received config from {client_id}: {config}")
 
         if config.get("type") == "config":
-            config_state["model_type"] = ModelType(config.get("model", "medium"))
-            config_state["action"] = ActionType(config.get("action", "transcribe"))
+            config_state["model_type"] = ModelType(
+                config.get("model", "turbo")
+            )
+            config_state["action"] = ActionType(
+                config.get("action", "transcribe")
+            )
             config_state["target_language"] = config.get("target_language")
 
             logger.info(
@@ -181,7 +194,10 @@ async def _handle_text_message(
             )
 
             # Send acknowledgment
-            ack_message = {"type": "config_ack", "message": "Configuration received"}
+            ack_message = {
+                "type": "config_ack",
+                "message": "Configuration received",
+            }
             logger.info(f"Sending config_ack to {client_id}: {ack_message}")
             await websocket.send_json(ack_message)
             logger.info(f"Successfully sent config_ack to {client_id}")
@@ -192,7 +208,11 @@ async def _handle_text_message(
             # Process any remaining audio buffer
             if audio_buffer and len(audio_buffer) > 0:
                 await _process_final_buffer(
-                    websocket, audio_buffer, config_state, client_id, mark_final=True
+                    websocket,
+                    audio_buffer,
+                    config_state,
+                    client_id,
+                    mark_final=True,
                 )
 
             # Send done signal to client
@@ -210,7 +230,10 @@ async def _handle_text_message(
         logger.error(f"Invalid configuration values from {client_id}: {e}")
         if websocket.client_state == WebSocketState.CONNECTED:
             await websocket.send_json(
-                {"type": "error", "message": f"Invalid configuration: {str(e)}"}
+                {
+                    "type": "error",
+                    "message": f"Invalid configuration: {str(e)}",
+                }
             )
 
 
@@ -225,7 +248,9 @@ async def _handle_audio_message(
 ):
     """Handle audio data messages"""
     audio_chunk = message["bytes"]
-    logger.debug(f"Received {len(audio_chunk)} bytes of audio from {client_id}")
+    logger.debug(
+        f"Received {len(audio_chunk)} bytes of audio from {client_id}"
+    )
 
     if len(audio_chunk) == 0:
         logger.warning(f"Received empty audio chunk from {client_id}")
@@ -262,7 +287,9 @@ async def _handle_audio_message(
 
                 if websocket.client_state == WebSocketState.CONNECTED:
                     await websocket.send_json(response.dict())
-                    logger.info(f"Sent transcription to {client_id}: {transcription}")
+                    logger.info(
+                        f"Sent transcription to {client_id}: {transcription}"
+                    )
             else:
                 logger.debug(f"Empty transcription result for {client_id}")
 
@@ -317,14 +344,18 @@ async def _process_final_buffer(
                 )
 
                 await websocket.send_json(final_response.dict())
-                logger.info(f"Sent final transcription to {client_id}: {transcription}")
+                logger.info(
+                    f"Sent final transcription to {client_id}: {transcription}"
+                )
             elif websocket.client_state != WebSocketState.CONNECTED:
                 logger.debug(
                     f"Skipping final transcription send - "
                     f"WebSocket not connected for {client_id}"
                 )
         except Exception as e:
-            logger.error(f"Error processing final buffer for {client_id}: {str(e)}")
+            logger.error(
+                f"Error processing final buffer for {client_id}: {str(e)}"
+            )
         finally:
             # Clear buffer after processing
             audio_buffer.clear()
