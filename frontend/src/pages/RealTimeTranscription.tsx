@@ -74,7 +74,8 @@ const RealTimeTranscription = () => {
       try {
         console.log('🔗 Iniciando conexão WebSocket...');
         
-        const wsUrl = `ws://localhost:8000/api/v1/transcribe/realtime`;
+        const wsProtocol = window.location.protocol === 'https:' ? 'wss' : 'ws';
+        const wsUrl = `${wsProtocol}://${window.location.host}/api/v1/transcribe/realtime`;
         console.log('🌐 Creating WebSocket connection to:', wsUrl);
         websocketRef.current = new WebSocket(wsUrl);
         

@@ -286,7 +286,7 @@ async def _handle_audio_message(
                 )
 
                 if websocket.client_state == WebSocketState.CONNECTED:
-                    await websocket.send_json(response.dict())
+                    await websocket.send_json(response.model_dump())
                     logger.info(
                         f"Sent transcription to {client_id}: {transcription}"
                     )
@@ -343,7 +343,7 @@ async def _process_final_buffer(
                     is_partial=not mark_final,
                 )
 
-                await websocket.send_json(final_response.dict())
+                await websocket.send_json(final_response.model_dump())
                 logger.info(
                     f"Sent final transcription to {client_id}: {transcription}"
                 )

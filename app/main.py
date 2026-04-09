@@ -1,4 +1,5 @@
 import logging
+from contextlib import asynccontextmanager
 from pathlib import Path
 
 from fastapi import FastAPI
@@ -15,8 +16,26 @@ logging.basicConfig(
     level=logging.DEBUG if settings.debug else logging.INFO,
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
 )
+# Silence noisy third-party debug loggers
+logging.getLogger("python_multipart").setLevel(logging.WARNING)
 
 logger = logging.getLogger(__name__)
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """Preload models on startup to avoid first-request delays."""
+    logger.info(f"Starting {settings.app_name} v{settings.app_version}")
+    try:
+        logger.info("Preloading Whisper models...")
+        whisper_service = get_whisper_service()
+        await whisper_service._get_model(ModelType.TURBO)
+        logger.info("Models preloaded successfully - ready for transcription")
+    except Exception as e:
+        logger.warning(f"Model preload warning: {str(e)}")
+        logger.info("Models will be loaded on first use")
+    yield
+
 
 # Create FastAPI application
 app = FastAPI(
@@ -24,9 +43,8 @@ app = FastAPI(
     version=settings.app_version,
     description="Audio transcription service using OpenAI Whisper",
     debug=settings.debug,
+    lifespan=lifespan,
 )
-
-logger.info(f"Starting {settings.app_name} v{settings.app_version}")
 
 # Configure CORS
 app.add_middleware(
@@ -38,7 +56,7 @@ app.add_middleware(
         "http://127.0.0.1:3000",
         "http://frontend:3000",
         "http://0.0.0.0:3000",
-    ],  # Frontend dev server
+    ],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -46,23 +64,6 @@ app.add_middleware(
 
 # Include routers
 app.include_router(transcription.router, prefix="/api")
-
-
-@app.on_event("startup")
-async def startup_tasks():
-    """Application startup tasks - preload models to avoid first-time delays"""
-    try:
-        logger.info("Preloading Whisper models...")
-        whisper_service = get_whisper_service()
-
-        # Preload turbo model (good balance of speed/quality) for same
-        # language transcription
-        await whisper_service._get_model(ModelType.TURBO)
-
-        logger.info("Models preloaded successfully - ready for transcription")
-    except Exception as e:
-        logger.warning(f"Model preload warning: {str(e)}")
-        logger.info("Models will be loaded on first use")
 
 
 @app.get("/health")
@@ -106,4 +107,10 @@ else:
 if __name__ == "__main__":
     import uvicorn
 
-    uvicorn.run("main:app", host="0.0.0.0", port=8000, reload=settings.debug)
+    uvicorn.run(
+        "app.main:app",
+        host="0.0.0.0",
+        port=8000,
+        reload=settings.debug,
+        reload_dirs=["app"],
+    )

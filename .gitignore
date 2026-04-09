@@ -15,8 +15,7 @@ downloads/
 eggs/
 .eggs/
 lib/
-# Uncommented to ensure frontend/src/lib/utils.ts is tracked
-# This file is essential for shadcn/ui components
+!frontend/src/lib/
 lib64/
 parts/
 sdist/
@@ -223,4 +222,7 @@ node_modules/
 
 notebooks/
 analysis_requirements.txt
+
+# Vite
+.vite/
 

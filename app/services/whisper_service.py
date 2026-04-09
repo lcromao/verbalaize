@@ -25,7 +25,6 @@ logger = logging.getLogger(__name__)
 
 class WhisperService:
     _instance = None
-    _lock = asyncio.Lock()
 
     def __new__(cls):
         if cls._instance is None:

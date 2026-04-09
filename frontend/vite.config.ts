@@ -5,9 +5,6 @@ import { componentTagger } from "lovable-tagger";
 
 // https://vitejs.dev/config/
 export default defineConfig(({ mode }) => {
-  console.log('Vite config - __dirname:', __dirname);
-  console.log('Vite config - src path:', path.resolve(__dirname, "./src"));
-  
   return {
     server: {
       host: "0.0.0.0",
