@@ -45,7 +45,7 @@ def stage_files(source_dir: Path, destination_dir: Path) -> None:
             destination = destination_dir / candidate.name
             shutil.copyfile(candidate, destination)
             destination.chmod(0o755 if candidate.name in executables else 0o644)
-            if sys.platform == "darwin":
+            if sys.platform == "darwin" and hasattr(os, "listxattr"):
                 for attribute in os.listxattr(destination):
                     os.removexattr(destination, attribute)
             copied += 1

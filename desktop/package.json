@@ -6,9 +6,9 @@
   "scripts": {
     "frontend:dev": "npm --prefix ../frontend run dev -- --host 127.0.0.1 --port 3000",
     "frontend:build": "npm --prefix ../frontend run build",
-    "prepare:sidecar": "python scripts/build_sidecar.py",
-    "prepare:sidecar:if-needed": "python -c \"from scripts._common import detect_target_triple; from pathlib import Path; t=detect_target_triple(); ext='.exe' if 'windows' in t else ''; p=Path('src-tauri/binaries/verbalaize-backend-'+t+ext); exit(0) if p.exists() else exit(1)\" || npm run prepare:sidecar",
-    "prepare:ffmpeg": "python scripts/stage_ffmpeg.py",
+    "prepare:sidecar": "${PYTHON:-python} scripts/build_sidecar.py",
+    "prepare:sidecar:if-needed": "${PYTHON:-python} -c \"from scripts._common import detect_target_triple; from pathlib import Path; t=detect_target_triple(); ext='.exe' if 'windows' in t else ''; p=Path('src-tauri/binaries/verbalaize-backend-'+t+ext); exit(0) if p.exists() else exit(1)\" || npm run prepare:sidecar",
+    "prepare:ffmpeg": "${PYTHON:-python} scripts/stage_ffmpeg.py",
     "tauri:dev": "tauri dev --config src-tauri/tauri.conf.json",
     "tauri:build": "tauri build --config src-tauri/tauri.conf.json",
     "dev": "concurrently -k \"npm:frontend:dev\" \"wait-on tcp:127.0.0.1:3000 && npm run prepare:sidecar:if-needed && npm run prepare:ffmpeg && npm run tauri:dev\"",

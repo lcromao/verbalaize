@@ -18,3 +18,4 @@ jupyter
 matplotlib
 seaborn
 faster-whisper
+PyInstaller

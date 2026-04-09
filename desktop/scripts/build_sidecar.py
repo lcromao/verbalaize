@@ -24,8 +24,10 @@ def main() -> int:
     target_triple = detect_target_triple()
     suffix = ".exe" if "windows" in target_triple else ""
 
-    if shutil.which("pyinstaller") is None:
-        raise SystemExit("PyInstaller not found on PATH")
+    try:
+        subprocess.run([sys.executable, "-m", "PyInstaller", "--version"], check=True, capture_output=True)
+    except subprocess.CalledProcessError:
+        raise SystemExit("PyInstaller not found. Run: pip install pyinstaller")
 
     BUILD_DIST.mkdir(parents=True, exist_ok=True)
     BUILD_WORK.mkdir(parents=True, exist_ok=True)
@@ -33,7 +35,7 @@ def main() -> int:
 
     subprocess.run(
         [
-            "pyinstaller",
+            sys.executable, "-m", "PyInstaller",
             "--noconfirm",
             "--clean",
             "--distpath",
