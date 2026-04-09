@@ -11,12 +11,12 @@ export const ModelSelector = () => {
   const { model, setModel } = useTranscriptionStore();
 
   return (
-    <div className="flex items-center gap-2">
-      <label className="text-sm font-medium text-muted-foreground">
-        Modelo:
+    <div className="flex items-center gap-1.5">
+      <label className="text-xs text-muted-foreground hidden sm:block">
+        Modelo
       </label>
       <Select value={model} onValueChange={setModel}>
-        <SelectTrigger className="w-32">
+        <SelectTrigger className="w-28 h-7 text-xs">
           <SelectValue />
         </SelectTrigger>
         <SelectContent>

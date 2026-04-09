@@ -10,7 +10,7 @@ class Settings(BaseSettings):
 
     app_name: str = "Verbalaize - Audio Transcription Service"
     app_version: str = "1.0.0"
-    debug: bool = True
+    debug: bool = False
     host: str = "127.0.0.1"
     port: int = 8000
     serve_frontend_dist: bool = False
@@ -43,6 +43,12 @@ class Settings(BaseSettings):
     # Real-time transcription settings
     realtime_chunk_duration: int = 5  # seconds
     realtime_sample_rate: int = 16000
+
+    # Security — set VBZ_APP_SECRET to enable token validation.
+    # When None, the middleware is disabled (Docker / web deployments).
+    # In desktop mode, Tauri generates this at launch and passes it to both
+    # the Python sidecar and the frontend (VITE_APP_SECRET).
+    app_secret: str | None = None
 
 
 settings = Settings()

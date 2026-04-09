@@ -3,6 +3,7 @@ import json
 import logging
 import os
 import tempfile
+import time
 import uuid
 from typing import Optional
 
@@ -25,12 +26,34 @@ from app.schemas.transcription import (
     TranscriptionJobStatus,
     TranscriptionResponse,
 )
+from app.core.config import settings
 from app.services.whisper_service import whisper_service
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/v1/transcribe", tags=["transcription"])
 transcription_jobs: dict[str, dict] = {}
+
+# Jobs older than this are purged automatically
+_JOB_TTL_SECONDS = 3600  # 1 hour
+
+
+def _cleanup_expired_jobs() -> None:
+    now = time.time()
+    expired = [
+        jid for jid, job in transcription_jobs.items()
+        if now - job.get("created_at", now) > _JOB_TTL_SECONDS
+    ]
+    for jid in expired:
+        job = transcription_jobs.pop(jid, {})
+        temp_path = job.get("temp_path")
+        if temp_path and os.path.exists(temp_path):
+            try:
+                os.unlink(temp_path)
+            except OSError:
+                pass
+    if expired:
+        logger.info("Purged %d expired transcription job(s)", len(expired))
 
 
 @router.post("/upload", response_model=TranscriptionResponse)
@@ -47,6 +70,14 @@ async def transcribe_upload(
     - **action**: Action to perform (transcribe, translate_english)
     """
 
+    content = await file.read()
+    if len(content) > settings.max_file_size:
+        raise HTTPException(
+            status_code=413,
+            detail=f"File size exceeds the {settings.max_file_size // (1024 * 1024)} MB limit",
+        )
+    await file.seek(0)
+
     try:
         result = await whisper_service.transcribe_file(
             file=file,
@@ -58,7 +89,8 @@ async def transcribe_upload(
     except HTTPException:
         raise
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        logger.error("Transcription error: %s", e)
+        raise HTTPException(status_code=500, detail="Transcription failed")
 
 
 @router.post("/upload/start", response_model=TranscriptionJobAccepted)
@@ -67,11 +99,19 @@ async def start_transcription_upload(
     model: ModelType = Form(...),
     action: ActionType = Form(...),
 ):
+    content = await file.read()
+    if len(content) > settings.max_file_size:
+        raise HTTPException(
+            status_code=413,
+            detail=f"File size exceeds the {settings.max_file_size // (1024 * 1024)} MB limit",
+        )
+
+    _cleanup_expired_jobs()
+
     suffix = (
         f".{file.filename.split('.')[-1]}" if file.filename else ".wav"
     )
     with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as temp_file:
-        content = await file.read()
         temp_file.write(content)
         temp_file.flush()
         temp_path = temp_file.name
@@ -89,6 +129,7 @@ async def start_transcription_upload(
         "filename": file.filename or "audio.wav",
         "content_type": file.content_type,
         "temp_path": temp_path,
+        "created_at": time.time(),
     }
 
     asyncio.create_task(
@@ -108,6 +149,7 @@ async def start_transcription_upload(
 
 @router.get("/upload/status/{job_id}", response_model=TranscriptionJobStatus)
 async def get_transcription_upload_status(job_id: str):
+    _cleanup_expired_jobs()
     job = transcription_jobs.get(job_id)
     if job is None:
         raise HTTPException(status_code=404, detail="Transcription job not found")
@@ -184,7 +226,7 @@ async def transcribe_realtime(websocket: WebSocket):
 
     Then send audio chunks as binary data
     """
-    client_id = f"{id(websocket)}"
+    client_id = str(uuid.uuid4())
     logger.info(f"WebSocket connection attempt from {client_id}")
 
     await websocket.accept()
@@ -259,7 +301,7 @@ async def transcribe_realtime(websocket: WebSocket):
         logger.error(f"WebSocket error for {client_id}: {str(e)}")
         try:
             await websocket.send_json(
-                {"type": "error", "message": f"WebSocket error: {str(e)}"}
+                {"type": "error", "message": "An unexpected error occurred"}
             )
         except Exception:
             logger.error(f"Failed to send error message to {client_id}")
@@ -415,10 +457,7 @@ async def _handle_audio_message(
             logger.error(f"Transcription error for {client_id}: {str(e)}")
             if websocket.client_state == WebSocketState.CONNECTED:
                 await websocket.send_json(
-                    {
-                        "type": "error",
-                        "message": f"Transcription error: {str(e)}",
-                    }
+                    {"type": "error", "message": "Transcription failed"}
                 )
 
     return None

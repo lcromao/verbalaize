@@ -7,6 +7,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from starlette.staticfiles import StaticFiles
 
 from app.core.config import settings
+from app.middleware.token import AppSecretMiddleware
 from app.routes import transcription
 from app.schemas.transcription import ModelType
 from app.services.whisper_service import get_whisper_service
@@ -46,6 +47,13 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
+# Secret token middleware (desktop mode only — no-op when VBZ_APP_SECRET is unset)
+if settings.app_secret:
+    app.add_middleware(AppSecretMiddleware, secret=settings.app_secret)
+    logger.info("AppSecretMiddleware enabled")
+else:
+    logger.info("AppSecretMiddleware disabled (VBZ_APP_SECRET not set)")
+
 # Configure CORS
 app.add_middleware(
     CORSMiddleware,
@@ -58,8 +66,8 @@ app.add_middleware(
         "http://0.0.0.0:3000",
     ],
     allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_methods=["GET", "POST", "OPTIONS"],
+    allow_headers=["Content-Type", "X-App-Secret"],
 )
 
 # Include routers

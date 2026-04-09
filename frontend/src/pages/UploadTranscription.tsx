@@ -1,11 +1,12 @@
 import { useEffect, useRef, useState } from 'react';
 import { useTranscriptionStore } from '@/hooks/useTranscriptionStore';
+import { useHistoryStore } from '@/hooks/useHistoryStore';
 import { FfmpegInstallAlert } from '@/components/FfmpegInstallAlert';
 import { ProcessingStatus } from '@/components/ProcessingStatus';
 import { Button } from '@/components/ui/button';
-import { Card } from '@/components/ui/card';
 import { Textarea } from '@/components/ui/textarea';
-import { Upload, FileAudio, X, Loader2, Copy, Download, Trash2, Sparkles } from 'lucide-react';
+import { Progress } from '@/components/ui/progress';
+import { Upload, FileAudio, X, Loader2, Copy, Download, Trash2 } from 'lucide-react';
 import { toast } from '@/hooks/use-toast';
 import { ApiService } from '@/services/api';
 import { isFfmpegMissingError } from '@/lib/transcriptionErrors';
@@ -13,6 +14,7 @@ import { getStageLabel } from '@/lib/transcriptionProgress';
 
 const UploadTranscription = () => {
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
+  const [isDragging, setIsDragging] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
   const [progress, setProgress] = useState<number>(0);
   const [displayProgress, setDisplayProgress] = useState<number>(0);
@@ -20,125 +22,136 @@ const UploadTranscription = () => {
   const [transcriptionResult, setTranscriptionResult] = useState('');
   const [ffmpegNotice, setFfmpegNotice] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
-  
-  const { model, action } = useTranscriptionStore();
 
-  const handleFileSelect = (event: React.ChangeEvent<HTMLInputElement>) => {
-    const file = event.target.files?.[0];
-    if (file) {
-      // Lista expandida de tipos suportados
-      const validTypes = [
-        'audio/mpeg', 'audio/mp3',           // MP3
-        'audio/mp4', 'audio/m4a', 'audio/x-m4a', 'audio/mp4a',  // M4A/MP4
-        'audio/wav', 'audio/wave', 'audio/x-wav',  // WAV
-        'audio/opus', 'audio/ogg', 'audio/x-opus', // Opus/OGG
-        'audio/webm',                        // WebM
-        'audio/flac', 'audio/x-flac',        // FLAC
-        'audio/aac', 'audio/x-aac',          // AAC
-        'audio/3gpp', 'audio/3gpp2',         // 3GP
-        'audio/amr', 'audio/x-amr',          // AMR
-        'video/mp4',                         // MP4 video (com áudio)
-        'application/octet-stream'           // Fallback
-      ];
-      
-      // Extensões válidas como fallback
-      const validExtensions = [
-        '.mp3', '.m4a', '.wav', '.opus', '.ogg', '.flac', 
-        '.aac', '.webm', '.mp4', '.3gp', '.amr'
-      ];
-      
-      const hasValidType = validTypes.includes(file.type);
-      const hasValidExtension = validExtensions.some(ext => 
-        file.name.toLowerCase().endsWith(ext)
-      );
-      
-      if (hasValidType || hasValidExtension) {
-        setSelectedFile(file);
-        setTranscriptionResult('');
-        setFfmpegNotice(null);
-      } else {
-        toast({
-          title: "Formato não suportado",
-          description: "Formatos suportados: MP3, M4A, WAV, OPUS, OGG, FLAC, AAC, WebM, MP4, 3GP, AMR",
-          variant: "destructive"
-        });
-      }
+  const { model, action, targetLanguage } = useTranscriptionStore();
+  const { entries, selectedId, addEntry, selectEntry } = useHistoryStore();
+
+  // Load selected history entry or reset on new session
+  useEffect(() => {
+    if (!selectedId) {
+      setSelectedFile(null);
+      setTranscriptionResult('');
+      setFfmpegNotice(null);
+      if (fileInputRef.current) fileInputRef.current.value = '';
+      return;
     }
+    const entry = entries.find((e) => e.id === selectedId && e.type === 'upload');
+    if (entry) {
+      setTranscriptionResult(entry.text);
+    }
+  }, [selectedId]);
+
+  const validTypes = [
+    'audio/mpeg', 'audio/mp3',
+    'audio/mp4', 'audio/m4a', 'audio/x-m4a', 'audio/mp4a',
+    'audio/wav', 'audio/wave', 'audio/x-wav',
+    'audio/opus', 'audio/ogg', 'audio/x-opus',
+    'audio/webm',
+    'audio/flac', 'audio/x-flac',
+    'audio/aac', 'audio/x-aac',
+    'audio/3gpp', 'audio/3gpp2',
+    'audio/amr', 'audio/x-amr',
+    'video/mp4',
+    'application/octet-stream',
+  ];
+
+  const validExtensions = [
+    '.mp3', '.m4a', '.wav', '.opus', '.ogg', '.flac',
+    '.aac', '.webm', '.mp4', '.3gp', '.amr',
+  ];
+
+  const handleFileSelect = (file: File) => {
+    const hasValidType = validTypes.includes(file.type);
+    const hasValidExtension = validExtensions.some(ext =>
+      file.name.toLowerCase().endsWith(ext)
+    );
+
+    if (hasValidType || hasValidExtension) {
+      setSelectedFile(file);
+      setTranscriptionResult('');
+    } else {
+      toast({
+        title: 'Formato não suportado',
+        description: 'Use MP3, M4A, WAV, OPUS, OGG, FLAC, AAC, WebM, MP4, 3GP ou AMR.',
+        variant: 'destructive',
+      });
+    }
+  };
+
+  const handleInputChange = (event: React.ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    if (file) handleFileSelect(file);
   };
 
   const handleDrop = (event: React.DragEvent) => {
     event.preventDefault();
+    setIsDragging(false);
     const file = event.dataTransfer.files[0];
-    if (file) {
-      setSelectedFile(file);
-      setTranscriptionResult('');
-    }
+    if (file) handleFileSelect(file);
   };
 
   const handleDragOver = (event: React.DragEvent) => {
     event.preventDefault();
+    setIsDragging(true);
   };
+
+  const handleDragLeave = () => setIsDragging(false);
 
   const removeFile = () => {
     setSelectedFile(null);
     setTranscriptionResult('');
-    setFfmpegNotice(null);
-    if (fileInputRef.current) {
-      fileInputRef.current.value = '';
-    }
+    if (fileInputRef.current) fileInputRef.current.value = '';
   };
 
   const transcribeFile = async () => {
     if (!selectedFile) return;
 
     setIsLoading(true);
-    setProgress(5);
-    setStageLabel('Na fila');
+    setProgress(0);
+
+    const progressInterval = setInterval(() => {
+      setProgress(prev => {
+        if (prev >= 90) {
+          clearInterval(progressInterval);
+          return prev;
+        }
+        return prev + Math.random() * 15;
+      });
+    }, 500);
 
     try {
-      const job = await ApiService.startTranscriptionJob({
+      const response = await ApiService.transcribeFile({
         file: selectedFile,
         model,
         action,
+        target_language: action === 'translate_language' ? targetLanguage : undefined,
       });
 
-      setProgress(job.progress);
-      setStageLabel('Na fila');
+      clearInterval(progressInterval);
+      setProgress(100);
+      setTranscriptionResult(response.text);
 
-      while (true) {
-        await new Promise((resolve) => setTimeout(resolve, 250));
-        const status = await ApiService.getTranscriptionJobStatus(job.job_id);
-        setProgress(status.progress);
-        setStageLabel(getStageLabel(status.stage, status.action));
-
-        if (status.status === 'completed') {
-          setTranscriptionResult(status.text ?? '');
-          setFfmpegNotice(null);
-          break;
-        }
-
-        if (status.status === 'failed') {
-          throw new Error(status.error || 'Erro desconhecido');
-        }
-      }
+      const title = selectedFile.name || response.text.slice(0, 50);
+      addEntry({
+        title,
+        text: response.text,
+        type: 'upload',
+        model,
+        action,
+        fileName: selectedFile.name,
+      });
 
       toast({
-        title: "Transcrição concluída!",
-        description: "O áudio foi processado com sucesso.",
+        title: 'Transcrição concluída',
+        description: 'O áudio foi processado com sucesso.',
       });
     } catch (error) {
-      console.error('Transcription error:', error);
-
+      clearInterval(progressInterval);
       const errorMessage = error instanceof Error ? error.message : 'Erro desconhecido';
-      if (isFfmpegMissingError(errorMessage)) {
-        setFfmpegNotice(errorMessage);
-        return;
-      }
-
       toast({
-        title: "Erro na transcrição",
+        title: 'Erro na transcrição',
         description: errorMessage,
-        variant: "destructive"
+        variant: 'destructive',
       });
     } finally {
       setIsLoading(false);
@@ -147,205 +160,157 @@ const UploadTranscription = () => {
     }
   };
 
-  const operationLabel = action === 'translate_english' ? 'Tradução' : 'Transcrição';
+  const copyText = () => {
+    navigator.clipboard.writeText(transcriptionResult);
+    toast({ title: 'Copiado para a área de transferência' });
+  };
 
-  useEffect(() => {
-    if (!isLoading) {
-      setDisplayProgress(progress);
-      return;
-    }
-
-    if (displayProgress === progress) {
-      return;
-    }
-
-    const intervalId = window.setInterval(() => {
-      setDisplayProgress((currentProgress) => {
-        if (currentProgress === progress) {
-          window.clearInterval(intervalId);
-          return currentProgress;
-        }
-
-        const remaining = progress - currentProgress;
-        const step = Math.max(1, Math.ceil(Math.abs(remaining) / 6));
-
-        if (remaining > 0) {
-          return Math.min(progress, currentProgress + step);
-        }
-
-        return Math.max(progress, currentProgress - step);
-      });
-    }, 60);
-
-    return () => {
-      window.clearInterval(intervalId);
-    };
-  }, [displayProgress, isLoading, progress]);
+  const downloadText = () => {
+    const blob = new Blob([transcriptionResult], { type: 'text/plain' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `transcricao_${selectedFile?.name || 'audio'}.txt`;
+    a.click();
+    URL.revokeObjectURL(url);
+    toast({ title: 'Download iniciado' });
+  };
 
   return (
-    <div className="max-w-4xl mx-auto space-y-6">
-      <div className="text-center">
-        <h2 className="text-3xl font-bold mb-2">Upload & Transcrição</h2>
-        <p className="text-muted-foreground">
+    <div className="max-w-3xl mx-auto space-y-8">
+      {/* Page Header */}
+      <div>
+        <h2 className="text-xl font-semibold tracking-tight">Upload & Transcrição</h2>
+        <p className="text-sm text-muted-foreground mt-1">
           Envie um arquivo de áudio para transcrever ou traduzir
         </p>
       </div>
 
       {/* Upload Area */}
-      <Card className="p-8">
-        <div
-          className="border-2 border-dashed border-muted-foreground/25 rounded-lg p-8 text-center hover:border-primary/50 transition-colors"
-          onDrop={handleDrop}
-          onDragOver={handleDragOver}
-        >
-          {selectedFile ? (
-            <div className="space-y-4">
-              <div className="flex items-center justify-center gap-3">
-                <FileAudio className="w-8 h-8 text-primary" />
-                <div className="text-left">
-                  <p className="font-medium">{selectedFile.name}</p>
-                  <p className="text-sm text-muted-foreground">
-                    {(selectedFile.size / 1024 / 1024).toFixed(2)} MB
-                  </p>
-                </div>
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  onClick={removeFile}
-                  className="ml-4"
-                >
-                  <X className="w-4 h-4" />
-                </Button>
+      <div
+        className={`
+          relative border-2 border-dashed rounded-xl p-10 text-center transition-all duration-200 cursor-pointer
+          ${isDragging
+            ? 'border-primary bg-primary/5'
+            : selectedFile
+            ? 'border-border bg-card'
+            : 'border-border hover:border-muted-foreground/50 hover:bg-muted/30'
+          }
+        `}
+        onDrop={handleDrop}
+        onDragOver={handleDragOver}
+        onDragLeave={handleDragLeave}
+        onClick={() => !selectedFile && fileInputRef.current?.click()}
+      >
+        {selectedFile ? (
+          <div className="flex items-center justify-between gap-4 text-left">
+            <div className="flex items-center gap-3 min-w-0">
+              <div className="w-10 h-10 rounded-lg bg-primary/10 flex items-center justify-center shrink-0">
+                <FileAudio className="w-5 h-5 text-primary" />
               </div>
-            </div>
-          ) : (
-            <div className="space-y-4">
-              <Upload className="w-12 h-12 text-muted-foreground mx-auto" />
-              <div>
-                <p className="text-lg font-medium mb-2">
-                  Arraste um arquivo aqui ou clique para selecionar
-                </p>
-                <p className="text-sm text-muted-foreground">
-                  Suporte para MP3, M4A, WAV, OPUS, OGG, FLAC, AAC, WebM, MP4, 3GP, AMR (max. 100MB)
+              <div className="min-w-0">
+                <p className="text-sm font-medium truncate">{selectedFile.name}</p>
+                <p className="text-xs text-muted-foreground">
+                  {(selectedFile.size / 1024 / 1024).toFixed(2)} MB
                 </p>
               </div>
-              <Button onClick={() => fileInputRef.current?.click()}>
-                Selecionar Arquivo
-              </Button>
             </div>
-          )}
-          
-          <input
-            ref={fileInputRef}
-            type="file"
-            onChange={handleFileSelect}
-            accept=".mp3,.m4a,.wav,.opus,.ogg,.flac,.aac,.webm,.mp4,.3gp,.amr,audio/*"
-            className="hidden"
-          />
-        </div>
-
-        {/* Backend processing state */}
-        {isLoading && (
-          <ProcessingStatus
-            title={`${operationLabel} em andamento`}
-            progress={displayProgress}
-            stageLabel={stageLabel}
-          />
-        )}
-
-        {ffmpegNotice && (
-          <FfmpegInstallAlert detail={ffmpegNotice} modeLabel="transcrição" />
-        )}
-
-        {/* Transcribe Button */}
-        {selectedFile && (
-          <div className="mt-6 text-center">
             <Button
-              onClick={transcribeFile}
-              disabled={isLoading}
-              size="lg"
-              className="min-w-48"
+              variant="ghost"
+              size="sm"
+              onClick={e => { e.stopPropagation(); removeFile(); }}
+              className="shrink-0 h-8 w-8 p-0 text-muted-foreground hover:text-foreground"
             >
-              {isLoading ? (
-                <>
-                  <Loader2 className="w-4 h-4 mr-2 animate-spin" />
-                  {operationLabel}...
-                </>
-              ) : (
-                `${action === 'translate_english' ? 'Traduzir' : 'Transcrever'} com ${model.toUpperCase()}`
-              )}
+              <X className="w-4 h-4" />
             </Button>
           </div>
+        ) : (
+          <div className="space-y-3">
+            <div className="w-12 h-12 rounded-xl bg-muted flex items-center justify-center mx-auto">
+              <Upload className="w-5 h-5 text-muted-foreground" />
+            </div>
+            <div>
+              <p className="text-sm font-medium">
+                Arraste um arquivo ou{' '}
+                <span className="text-primary underline-offset-2 hover:underline">clique para selecionar</span>
+              </p>
+              <p className="text-xs text-muted-foreground mt-1">
+                MP3, M4A, WAV, OPUS, OGG, FLAC, AAC, WebM, MP4 — até 100 MB
+              </p>
+            </div>
+          </div>
         )}
-      </Card>
+
+        <input
+          ref={fileInputRef}
+          type="file"
+          onChange={handleInputChange}
+          accept=".mp3,.m4a,.wav,.opus,.ogg,.flac,.aac,.webm,.mp4,.3gp,.amr,audio/*"
+          className="hidden"
+        />
+      </div>
+
+      {/* Progress */}
+      {isLoading && (
+        <div className="space-y-2">
+          <div className="flex justify-between text-xs text-muted-foreground">
+            <span>Processando áudio...</span>
+            <span>{Math.round(progress)}%</span>
+          </div>
+          <Progress value={progress} className="h-1" />
+        </div>
+      )}
+
+      {/* Transcribe Button */}
+      {selectedFile && (
+        <Button
+          onClick={transcribeFile}
+          disabled={isLoading}
+          className="w-full"
+          size="lg"
+        >
+          {isLoading ? (
+            <>
+              <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+              Processando...
+            </>
+          ) : (
+            `Transcrever com ${model.toUpperCase()}`
+          )}
+        </Button>
+      )}
 
       {/* Results */}
       {transcriptionResult && (
-        <Card className="p-6">
-          <h3 className="text-lg font-semibold mb-4">Resultado da Transcrição</h3>
+        <div className="space-y-3">
+          <div className="flex items-center justify-between">
+            <h3 className="text-sm font-medium">Resultado</h3>
+            <div className="flex gap-1">
+              <Button variant="ghost" size="sm" onClick={copyText} className="h-7 px-2 text-xs gap-1.5">
+                <Copy className="w-3 h-3" />
+                Copiar
+              </Button>
+              <Button variant="ghost" size="sm" onClick={downloadText} className="h-7 px-2 text-xs gap-1.5">
+                <Download className="w-3 h-3" />
+                Download
+              </Button>
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={() => setTranscriptionResult('')}
+                className="h-7 px-2 text-xs gap-1.5 text-muted-foreground"
+              >
+                <Trash2 className="w-3 h-3" />
+                Limpar
+              </Button>
+            </div>
+          </div>
           <Textarea
             value={transcriptionResult}
-            onChange={(e) => setTranscriptionResult(e.target.value)}
-            placeholder="O resultado da transcrição aparecerá aqui..."
-            className="min-h-48 resize-y"
+            onChange={e => setTranscriptionResult(e.target.value)}
+            className="min-h-52 resize-y text-sm leading-relaxed bg-card"
           />
-          <div className="flex justify-end gap-2 mt-4">
-            <Button
-              variant="outline"
-              onClick={() => navigator.clipboard.writeText(transcriptionResult)}
-            >
-              <Copy className="w-4 h-4 mr-2" />
-              Copiar Texto
-            </Button>
-            <Button
-              variant="outline"
-              onClick={() => {
-                const blob = new Blob([transcriptionResult], { type: 'text/plain' });
-                const url = URL.createObjectURL(blob);
-                const a = document.createElement('a');
-                a.href = url;
-                a.download = `transcricao_${selectedFile?.name || 'audio'}.txt`;
-                a.click();
-                URL.revokeObjectURL(url);
-                toast({
-                  title: "Download iniciado",
-                  description: "O arquivo de texto foi baixado com sucesso.",
-                });
-              }}
-            >
-              <Download className="w-4 h-4 mr-2" />
-              Download
-            </Button>
-            <Button
-              variant="outline"
-              onClick={() => {
-                setTranscriptionResult('');
-                toast({
-                  title: "Texto limpo",
-                  description: "O resultado da transcrição foi limpo.",
-                });
-              }}
-            >
-              <Trash2 className="w-4 h-4 mr-2" />
-              Limpar
-            </Button>
-            <Button
-              variant="outline"
-              onClick={() => {
-                // Simulação da sumarização
-                const summary = `Resumo: ${transcriptionResult.substring(0, 100)}...`;
-                setTranscriptionResult(summary);
-                toast({
-                  title: "Texto sumarizado",
-                  description: "O texto foi sumarizado com sucesso.",
-                });
-              }}
-            >
-              <Sparkles className="w-4 h-4 mr-2" />
-              Sumarizar
-            </Button>
-          </div>
-        </Card>
+        </div>
       )}
     </div>
   );
