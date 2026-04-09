@@ -6,8 +6,6 @@ import warnings
 from collections import defaultdict
 from typing import Any, Dict, Optional
 
-import torch
-import whisper
 from fastapi import HTTPException, UploadFile
 
 from app.core.config import settings
@@ -21,6 +19,16 @@ from app.schemas.transcription import (
 warnings.filterwarnings("ignore", message="FP16 is not supported on CPU")
 
 logger = logging.getLogger(__name__)
+
+try:
+    import torch
+except ImportError:  # pragma: no cover - depends on local runtime
+    torch = None
+
+try:
+    import whisper
+except ImportError:  # pragma: no cover - depends on local runtime
+    whisper = None
 
 
 class WhisperService:
@@ -36,12 +44,27 @@ class WhisperService:
             return
         self._models: Dict[str, Any] = {}
         self._locks = defaultdict(asyncio.Lock)
-        self.device = "cuda" if torch.cuda.is_available() else "cpu"
+        self.device = (
+            "cuda"
+            if torch is not None and torch.cuda.is_available()
+            else "cpu"
+        )
         self._initialized = True
         logger.info(f"WhisperService initialized with device: {self.device}")
 
+    def _ensure_runtime_dependencies(self):
+        if whisper is None:
+            raise HTTPException(
+                status_code=500,
+                detail=(
+                    "The 'openai-whisper' package is not installed in the "
+                    "current Python environment."
+                ),
+            )
+
     async def _load_model_blocking(self, model_name: str) -> Any:
         """Load Whisper model in executor to avoid blocking event loop"""
+        self._ensure_runtime_dependencies()
         loop = asyncio.get_running_loop()
         return await loop.run_in_executor(
             None,

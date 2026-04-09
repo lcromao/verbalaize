@@ -1,10 +1,18 @@
-from pydantic_settings import BaseSettings
+from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 class Settings(BaseSettings):
+    model_config = SettingsConfigDict(
+        env_prefix="VBZ_",
+        case_sensitive=False,
+        extra="ignore",
+    )
+
     app_name: str = "Verbalaize - Audio Transcription Service"
     app_version: str = "1.0.0"
     debug: bool = True
+    host: str = "0.0.0.0"
+    port: int = 8000
 
     # Whisper configuration
     whisper_model_cache_dir: str = "./whisper_models"

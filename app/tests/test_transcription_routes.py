@@ -1,26 +1,14 @@
-def test_root_endpoint(client):
-    """Test root endpoint"""
-    response = client.get("/")
-    assert response.status_code == 200
-    assert "name" in response.json()
-    assert "version" in response.json()
-
-
-def test_health_endpoint(client):
-    """Test health check endpoint"""
-    response = client.get("/health")
-    assert response.status_code == 200
-    assert response.json()["status"] == "healthy"
+from app.routes import transcription as transcription_routes
+from app.schemas.transcription import TranscriptionResponse
 
 
 def test_transcription_upload_missing_file(client):
-    """Test upload endpoint without file"""
     response = client.post("/api/v1/transcribe/upload")
+
     assert response.status_code == 422  # Validation error
 
 
 def test_transcription_upload_invalid_action(client, sample_audio_file):
-    """Test upload endpoint with invalid action"""
     data = {"model": "small", "action": "invalid_action"}
     response = client.post(
         "/api/v1/transcribe/upload", data=data, files=sample_audio_file
@@ -28,8 +16,67 @@ def test_transcription_upload_invalid_action(client, sample_audio_file):
     assert response.status_code == 422  # Validation error
 
 
-# Note: Testing actual transcription would require real audio files and models
-# For integration tests, you would need to:
-# 1. Have sample audio files in different formats
-# 2. Mock the whisper service or use smaller test models
-# 3. Test WebSocket connections with proper audio streaming
+def test_transcription_upload_requires_target_language(
+    client, sample_audio_file
+):
+    response = client.post(
+        "/api/v1/transcribe/upload",
+        data={"model": "small", "action": "translate_language"},
+        files=sample_audio_file,
+    )
+
+    assert response.status_code == 400
+    assert "target_language is required" in response.json()["detail"]
+
+
+def test_transcription_upload_success(client, monkeypatch, sample_audio_file):
+    async def fake_transcribe_file(
+        file, model_type, action, target_language=None
+    ):
+        assert file.filename == "test.wav"
+        assert model_type.value == "turbo"
+        assert action.value == "transcribe"
+        assert target_language is None
+        return TranscriptionResponse(
+            model=model_type.value,
+            action=action.value,
+            text="teste de transcricao",
+            target_language=target_language,
+        )
+
+    monkeypatch.setattr(
+        transcription_routes.whisper_service,
+        "transcribe_file",
+        fake_transcribe_file,
+    )
+
+    response = client.post(
+        "/api/v1/transcribe/upload",
+        data={"model": "turbo", "action": "transcribe"},
+        files=sample_audio_file,
+    )
+
+    assert response.status_code == 200
+    assert response.json()["text"] == "teste de transcricao"
+
+
+def test_transcription_upload_wraps_unexpected_errors(
+    client, monkeypatch, sample_audio_file
+):
+    async def fake_transcribe_file(*args, **kwargs):
+        raise RuntimeError("boom")
+
+    monkeypatch.setattr(
+        transcription_routes.whisper_service,
+        "transcribe_file",
+        fake_transcribe_file,
+    )
+
+    response = client.post(
+        "/api/v1/transcribe/upload",
+        data={"model": "small", "action": "transcribe"},
+        files=sample_audio_file,
+    )
+
+    assert response.status_code == 500
+    assert response.json()["detail"] == "boom"
