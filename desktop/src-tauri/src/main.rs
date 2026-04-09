@@ -69,6 +69,20 @@ fn path_separator() -> &'static str {
     }
 }
 
+const MAX_LOG_SIZE: u64 = 5 * 1024 * 1024; // 5 MB
+
+fn rotate_log(log_path: &Path) {
+    if let Ok(metadata) = fs::metadata(log_path) {
+        if metadata.len() > MAX_LOG_SIZE {
+            // Single-level rotation: backend.log → backend.log.old.
+            // Any existing .log.old from a prior session is intentionally
+            // overwritten — we only keep one backup slot.
+            let rotated = log_path.with_extension("log.old");
+            let _ = fs::rename(log_path, rotated);
+        }
+    }
+}
+
 fn append_log(log_path: &Path, line: &str) {
     if let Some(parent) = log_path.parent() {
         let _ = fs::create_dir_all(parent);
@@ -97,12 +111,21 @@ where
     });
 }
 
-fn wait_for_health(port: u16, timeout: Duration) -> Result<(), Box<dyn Error>> {
+fn wait_for_health(
+    port: u16,
+    timeout: Duration,
+    child: &mut Child,
+) -> Result<(), Box<dyn Error>> {
     let client = Client::builder().timeout(Duration::from_secs(5)).build()?;
     let deadline = Instant::now() + timeout;
     let url = format!("http://127.0.0.1:{port}/health");
 
     while Instant::now() < deadline {
+        // Fail fast if the backend process has already exited.
+        if let Ok(Some(status)) = child.try_wait() {
+            return Err(format!("Backend exited during startup with: {status}").into());
+        }
+
         if let Ok(response) = client.get(&url).send() {
             if response.status().is_success() {
                 return Ok(());
@@ -249,7 +272,7 @@ fn terminate_backend_pid(pid: u32) {
     let _ = Command::new("kill")
         .args(["-TERM", &process_group])
         .status();
-    thread::sleep(Duration::from_millis(300));
+    thread::sleep(Duration::from_secs(3));
     let _ = Command::new("kill")
         .args(["-KILL", &process_group])
         .status();
@@ -292,6 +315,7 @@ fn spawn_backend(
     let port = find_free_port();
     let secret = Uuid::new_v4().to_string();
     let log_path = logs_dir.join("backend.log");
+    rotate_log(&log_path);
     let pid_file = backend_pid_file(app)?;
     cleanup_stale_backend(app, &log_path);
     append_log(
@@ -367,7 +391,7 @@ fn build_runtime_script(secret: &str, port: u16) -> String {
 
 fn setup_app(app: &mut tauri::App) -> Result<(), Box<dyn Error>> {
     let app_handle = app.handle().clone();
-    let (child, log_path, secret, port) = match spawn_backend(&app_handle) {
+    let (mut child, log_path, secret, port) = match spawn_backend(&app_handle) {
         Ok(result) => result,
         Err(error) => {
             let fallback_log = app
@@ -381,9 +405,8 @@ fn setup_app(app: &mut tauri::App) -> Result<(), Box<dyn Error>> {
         }
     };
 
-    if let Err(error) = wait_for_health(port, Duration::from_secs(45)) {
+    if let Err(error) = wait_for_health(port, Duration::from_secs(45), &mut child) {
         append_log(&log_path, &format!("[desktop] startup failure: {error}\n"));
-        let mut child = child;
         let _ = child.kill();
         let _ = child.wait();
         show_startup_error(&error.to_string(), &log_path);

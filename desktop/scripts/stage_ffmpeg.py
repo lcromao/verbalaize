@@ -1,32 +1,15 @@
 from __future__ import annotations
 
 import os
-import platform
 import shutil
 import sys
 from pathlib import Path
 
+from _common import detect_target_triple
+
 
 ROOT = Path(__file__).resolve().parents[2]
 DEST_ROOT = ROOT / "desktop" / "src-tauri" / "resources" / "ffmpeg"
-
-
-def detect_target_triple() -> str:
-    system = platform.system().lower()
-    machine = platform.machine().lower()
-
-    if system == "darwin":
-        if machine in {"arm64", "aarch64"}:
-            return "aarch64-apple-darwin"
-        return "x86_64-apple-darwin"
-
-    if system == "windows":
-        return "x86_64-pc-windows-msvc"
-
-    if system == "linux":
-        return "x86_64-unknown-linux-gnu"
-
-    raise RuntimeError(f"Unsupported build host: {system}/{machine}")
 
 
 def resolve_ffmpeg_dir() -> Path:
@@ -62,7 +45,7 @@ def stage_files(source_dir: Path, destination_dir: Path) -> None:
             destination = destination_dir / candidate.name
             shutil.copyfile(candidate, destination)
             destination.chmod(0o755 if candidate.name in executables else 0o644)
-            if hasattr(os, "listxattr") and hasattr(os, "removexattr"):
+            if sys.platform == "darwin":
                 for attribute in os.listxattr(destination):
                     os.removexattr(destination, attribute)
             copied += 1

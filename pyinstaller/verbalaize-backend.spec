@@ -11,7 +11,9 @@ from PyInstaller.utils.hooks import (
 PROJECT_ROOT = Path(SPEC).resolve().parents[1]
 ENTRYPOINT = PROJECT_ROOT / "desktop" / "scripts" / "backend_entry.py"
 
-hiddenimports = collect_submodules("app") + [
+hiddenimports = collect_submodules("app") + collect_submodules("uvicorn") + [
+    "multipart",
+    "starlette.middleware.cors",
     "numba._devicearray",
     "whisper",
     "whisper.__main__",

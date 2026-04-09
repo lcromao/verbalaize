@@ -6,6 +6,14 @@
     "main"
   ],
   "permissions": [
-    "core:default"
+    "core:default",
+    "core:window:allow-close",
+    "core:window:allow-set-title",
+    "core:window:allow-set-size",
+    "core:window:allow-set-focus",
+    "core:window:allow-minimize",
+    "core:window:allow-maximize",
+    "core:window:allow-unmaximize",
+    "core:window:allow-toggle-maximize"
   ]
 }

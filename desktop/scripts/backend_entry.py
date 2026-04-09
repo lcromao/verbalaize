@@ -11,6 +11,7 @@ def main() -> None:
         port=settings.port,
         reload=False,
         log_level="debug" if settings.debug else "info",
+        timeout_graceful_shutdown=5,
     )
 
 
