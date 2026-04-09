@@ -16,7 +16,7 @@ def test_transcription_upload_invalid_action(client, sample_audio_file):
     assert response.status_code == 422  # Validation error
 
 
-def test_transcription_upload_requires_target_language(
+def test_transcription_upload_rejects_unsupported_action(
     client, sample_audio_file
 ):
     response = client.post(
@@ -25,23 +25,18 @@ def test_transcription_upload_requires_target_language(
         files=sample_audio_file,
     )
 
-    assert response.status_code == 400
-    assert "target_language is required" in response.json()["detail"]
+    assert response.status_code == 422
 
 
 def test_transcription_upload_success(client, monkeypatch, sample_audio_file):
-    async def fake_transcribe_file(
-        file, model_type, action, target_language=None
-    ):
+    async def fake_transcribe_file(file, model_type, action):
         assert file.filename == "test.wav"
         assert model_type.value == "turbo"
         assert action.value == "transcribe"
-        assert target_language is None
         return TranscriptionResponse(
             model=model_type.value,
             action=action.value,
             text="teste de transcricao",
-            target_language=target_language,
         )
 
     monkeypatch.setattr(
@@ -80,3 +75,25 @@ def test_transcription_upload_wraps_unexpected_errors(
 
     assert response.status_code == 500
     assert response.json()["detail"] == "boom"
+
+
+def test_transcription_upload_start_returns_job_id(client, sample_audio_file):
+    response = client.post(
+        "/api/v1/transcribe/upload/start",
+        data={"model": "turbo", "action": "transcribe"},
+        files=sample_audio_file,
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["job_id"]
+    assert payload["status"] == "queued"
+    assert payload["progress"] == 5
+
+
+def test_transcription_upload_status_returns_not_found(client):
+    response = client.get(
+        "/api/v1/transcribe/upload/status/missing-job"
+    )
+
+    assert response.status_code == 404

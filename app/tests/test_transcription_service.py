@@ -29,13 +29,10 @@ def test_transcribe_file_accepts_extension_fallback(monkeypatch):
     async def fake_get_model(_model_type):
         return object()
 
-    async def fake_transcribe_with_model(
-        model, file_path, action, target_language=None
-    ):
+    async def fake_transcribe_with_model(model, file_path, action):
         observed["file_path"] = file_path
         assert os.path.exists(file_path)
         assert action == ActionType.TRANSCRIBE
-        assert target_language is None
         return "texto transcrito"
 
     monkeypatch.setattr(service, "_get_model", fake_get_model)
@@ -79,9 +76,7 @@ def test_transcribe_file_cleans_up_temp_file_on_failure(monkeypatch):
     async def fake_get_model(_model_type):
         return object()
 
-    async def fake_transcribe_with_model(
-        model, file_path, action, target_language=None
-    ):
+    async def fake_transcribe_with_model(model, file_path, action):
         observed["file_path"] = file_path
         raise RuntimeError("transcription failed")
 

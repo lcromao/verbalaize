@@ -1,5 +1,9 @@
+import asyncio
 import json
 import logging
+import os
+import tempfile
+import uuid
 from typing import Optional
 
 from fastapi import (
@@ -17,6 +21,8 @@ from app.schemas.transcription import (
     ActionType,
     ModelType,
     RealtimeTranscriptionMessage,
+    TranscriptionJobAccepted,
+    TranscriptionJobStatus,
     TranscriptionResponse,
 )
 from app.services.whisper_service import whisper_service
@@ -24,6 +30,7 @@ from app.services.whisper_service import whisper_service
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/v1/transcribe", tags=["transcription"])
+transcription_jobs: dict[str, dict] = {}
 
 
 @router.post("/upload", response_model=TranscriptionResponse)
@@ -31,29 +38,20 @@ async def transcribe_upload(
     file: UploadFile = File(...),
     model: ModelType = Form(...),
     action: ActionType = Form(...),
-    target_language: Optional[str] = Form(None),
 ):
     """
     Transcribe uploaded audio file
 
     - **file**: Audio file (MP3, M4A, WAV, OPUS, OGG, FLAC, AAC, WebM, MP4, 3GP, AMR)
     - **model**: Whisper model to use (small, medium, turbo)
-    - **action**: Action to perform (transcribe, translate_english, translate_language)
-    - **target_language**: Target language code (required for translate_language)
+    - **action**: Action to perform (transcribe, translate_english)
     """
-
-    if action == ActionType.TRANSLATE_LANGUAGE and not target_language:
-        raise HTTPException(
-            status_code=400,
-            detail="target_language is required when action is translate_language",
-        )
 
     try:
         result = await whisper_service.transcribe_file(
             file=file,
             model_type=model,
             action=action,
-            target_language=target_language,
         )
         return result
 
@@ -61,6 +59,115 @@ async def transcribe_upload(
         raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/upload/start", response_model=TranscriptionJobAccepted)
+async def start_transcription_upload(
+    file: UploadFile = File(...),
+    model: ModelType = Form(...),
+    action: ActionType = Form(...),
+):
+    suffix = (
+        f".{file.filename.split('.')[-1]}" if file.filename else ".wav"
+    )
+    with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as temp_file:
+        content = await file.read()
+        temp_file.write(content)
+        temp_file.flush()
+        temp_path = temp_file.name
+
+    job_id = str(uuid.uuid4())
+    transcription_jobs[job_id] = {
+        "job_id": job_id,
+        "status": "queued",
+        "progress": 5,
+        "stage": "queued",
+        "model": model.value,
+        "action": action.value,
+        "text": None,
+        "error": None,
+        "filename": file.filename or "audio.wav",
+        "content_type": file.content_type,
+        "temp_path": temp_path,
+    }
+
+    asyncio.create_task(
+        _run_transcription_job(
+            job_id=job_id,
+            model=model,
+            action=action,
+        )
+    )
+
+    return TranscriptionJobAccepted(
+        job_id=job_id,
+        status="queued",
+        progress=5,
+    )
+
+
+@router.get("/upload/status/{job_id}", response_model=TranscriptionJobStatus)
+async def get_transcription_upload_status(job_id: str):
+    job = transcription_jobs.get(job_id)
+    if job is None:
+        raise HTTPException(status_code=404, detail="Transcription job not found")
+
+    return TranscriptionJobStatus(
+        job_id=job["job_id"],
+        status=job["status"],
+        progress=job["progress"],
+        stage=job["stage"],
+        model=job["model"],
+        action=job["action"],
+        text=job["text"],
+        error=job["error"],
+    )
+
+
+async def _run_transcription_job(
+    job_id: str,
+    model: ModelType,
+    action: ActionType,
+):
+    job = transcription_jobs[job_id]
+    job["status"] = "processing"
+    job["progress"] = 10
+    job["stage"] = "processing"
+
+    def on_progress(progress: int, stage: str):
+        current_job = transcription_jobs.get(job_id)
+        if current_job is None:
+            return
+        current_job["progress"] = progress
+        current_job["stage"] = stage
+
+    try:
+        response = await whisper_service.transcribe_file_path(
+            file_path=job["temp_path"],
+            filename=job["filename"],
+            content_type=job["content_type"],
+            model_type=model,
+            action=action,
+            on_progress=on_progress,
+        )
+        job["status"] = "completed"
+        job["progress"] = 100
+        job["stage"] = "completed"
+        job["text"] = response.text
+    except HTTPException as exc:
+        job["status"] = "failed"
+        job["progress"] = 100
+        job["stage"] = "failed"
+        job["error"] = exc.detail
+    except Exception as exc:
+        job["status"] = "failed"
+        job["progress"] = 100
+        job["stage"] = "failed"
+        job["error"] = str(exc)
+    finally:
+        temp_path = job.get("temp_path")
+        if temp_path and os.path.exists(temp_path):
+            os.unlink(temp_path)
 
 
 @router.websocket("/realtime")
@@ -72,8 +179,7 @@ async def transcribe_realtime(websocket: WebSocket):
     {
         "type": "config",
         "model": "medium",
-        "action": "transcribe",
-        "target_language": null
+        "action": "transcribe"
     }
 
     Then send audio chunks as binary data
@@ -88,7 +194,6 @@ async def transcribe_realtime(websocket: WebSocket):
     config_state = {
         "model_type": ModelType.MEDIUM,
         "action": ActionType.TRANSCRIBE,
-        "target_language": None,
     }
 
     # Audio buffer for accumulating chunks
@@ -179,18 +284,28 @@ async def _handle_text_message(
         logger.info(f"Received config from {client_id}: {config}")
 
         if config.get("type") == "config":
-            config_state["model_type"] = ModelType(
-                config.get("model", "turbo")
-            )
-            config_state["action"] = ActionType(
-                config.get("action", "transcribe")
-            )
-            config_state["target_language"] = config.get("target_language")
+            raw_model = config.get("model", "turbo")
+            raw_action = config.get("action", "transcribe")
+
+            try:
+                config_state["model_type"] = ModelType(raw_model)
+            except ValueError as exc:
+                raise ValueError(f"Unsupported model: {raw_model}") from exc
+
+            try:
+                config_state["action"] = ActionType(raw_action)
+            except ValueError as exc:
+                raise ValueError(
+                    "Unsupported action: "
+                    f"{raw_action}. Available actions: "
+                    "transcribe, translate_english"
+                ) from exc
 
             logger.info(
-                f"Configuration updated for {client_id}: "
-                f"model={config_state['model_type']}, action={config_state['action']}, "
-                f"target_language={config_state['target_language']}"
+                "Configuration updated for %s: model=%s, action=%s",
+                client_id,
+                config_state["model_type"],
+                config_state["action"],
             )
 
             # Send acknowledgment
@@ -276,7 +391,6 @@ async def _handle_audio_message(
                 audio_data=bytes(audio_buffer),
                 model_type=config_state["model_type"],
                 action=config_state["action"],
-                target_language=config_state["target_language"],
             )
 
             if transcription and transcription.strip():
@@ -328,7 +442,6 @@ async def _process_final_buffer(
                 audio_data=bytes(audio_buffer),
                 model_type=config_state["model_type"],
                 action=config_state["action"],
-                target_language=config_state["target_language"],
             )
 
             # Only send if WebSocket is still connected

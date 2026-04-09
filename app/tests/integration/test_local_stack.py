@@ -87,7 +87,10 @@ def test_frontend_proxy_uploads_real_audio(
 
     frontend_env = os.environ.copy()
     frontend_env.update(
-        {"VITE_API_URL": f"http://127.0.0.1:{backend_port}", "CI": "1"}
+        {
+            "VITE_API_PROXY_TARGET": f"http://127.0.0.1:{backend_port}",
+            "CI": "1",
+        }
     )
 
     backend_process, backend_log, backend_log_handle = start_process(

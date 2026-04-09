@@ -11,11 +11,12 @@ class Settings(BaseSettings):
     app_name: str = "Verbalaize - Audio Transcription Service"
     app_version: str = "1.0.0"
     debug: bool = True
-    host: str = "0.0.0.0"
+    host: str = "127.0.0.1"
     port: int = 8000
+    serve_frontend_dist: bool = False
 
     # Whisper configuration
-    whisper_model_cache_dir: str = "./whisper_models"
+    whisper_model_cache_dir: str = "./.whisper_models"
 
     # VerbAIze specific settings (speedup features)
     enable_speedup: bool = False

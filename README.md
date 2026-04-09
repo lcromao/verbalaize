@@ -11,12 +11,16 @@ Serviço de transcrição de áudio usando OpenAI Whisper. O backend é constru�
 **Para rodar localmente:**
 - Python 3.8+
 - Node.js 18+
+- FFmpeg instalado no sistema e disponivel no `PATH`
 
 ## Estrutura do projeto
 
 ```
 verbalaize/
 ├── app/                        # Backend (FastAPI)
+│   ├── Dockerfile
+│   ├── requirements.txt
+│   ├── pytest.ini
 │   ├── main.py
 │   ├── core/config.py
 │   ├── schemas/transcription.py
@@ -24,14 +28,16 @@ verbalaize/
 │   ├── routes/transcription.py
 │   └── tests/
 ├── frontend/                   # Frontend (React + TypeScript)
+│   ├── Dockerfile
 │   └── src/
-│       ├── components/
-│       ├── hooks/
-│       ├── pages/
-│       └── services/
+│      ├── components/
+│      ├── hooks/
+│      ├── pages/
+│      └── services/
 ├── docker-compose.yml
-├── Dockerfile
-└── requirements.txt
+├── scripts.sh
+├── up.sh
+└── down.sh
 ```
 
 ## Rodando com Docker
@@ -40,11 +46,11 @@ verbalaize/
 git clone <repository-url>
 cd verbalaize
 
-# Sobe os containers (backend + frontend)
-bash up.sh
+# Sobe os containers
+./scripts.sh docker-up
 
 # Para derrubar
-bash down.sh
+./scripts.sh docker-down
 ```
 
 Na primeira execução o Docker baixa os modelos Whisper (~1.5 GB para o turbo). As execucoes seguintes usam o cache e iniciam em segundos.
@@ -63,14 +69,24 @@ Acessos:
 python -m venv venv
 source venv/bin/activate   # Windows: venv\Scripts\activate
 
+# Garantir que o ffmpeg esteja disponivel no PATH
+ffmpeg -version
+
 # Instalar dependencias
-pip install -r requirements.txt
+pip install -r app/requirements.txt
 
 # Iniciar servidor
 python -m app.main
 ```
 
-O servidor inicia em http://localhost:8000. Na primeira inicializacao o modelo Whisper turbo e baixado automaticamente (~1.5 GB).
+O servidor inicia em http://127.0.0.1:8000. Na primeira inicializacao o modelo Whisper turbo e baixado automaticamente (~1.5 GB).
+
+Observacoes:
+- O backend nao serve mais o `frontend/dist` por padrao.
+- Em desenvolvimento local, o backend escuta apenas em `127.0.0.1` por padrao para evitar exposicao acidental na rede.
+- Em desenvolvimento local, o frontend deve ser executado separadamente com `npm run dev`.
+- Se quiser reativar o serving estatico do build do frontend pelo backend, defina `VBZ_SERVE_FRONTEND_DIST=true`.
+- Se quiser expor o backend em todas as interfaces, defina `VBZ_HOST=0.0.0.0`.
 
 ### Frontend
 
@@ -84,7 +100,7 @@ O frontend inicia em http://localhost:3000 e conecta ao backend via proxy config
 
 ## Plano de estabilizacao
 
-O objetivo da proxima etapa e reduzir bugs e divida tecnica sem quebrar o fluxo que ja funciona em desenvolvimento:
+O objetivo desta etapa foi reduzir bugs e divida tecnica sem quebrar o fluxo principal de desenvolvimento:
 
 - Backend sobe com `python -m app.main`
 - Frontend sobe com `cd frontend && npm run dev`
@@ -184,7 +200,7 @@ Aceite minimo por entrega:
 - `cd frontend && npm run dev` continua subindo
 - healthcheck do backend continua verde
 - proxy do frontend continua verde
-- upload de audio continua funcionando
+- upload de audio real via proxy continua funcionando
 
 ## API
 
@@ -198,7 +214,6 @@ Campos:
   file            Arquivo de audio (MP3, M4A, WAV, OGG, OPUS, FLAC, AAC, WebM)
   model           "small" | "medium" | "turbo"
   action          "transcribe" | "translate_english"
-  target_language Codigo do idioma (opcional, para traducao)
 ```
 
 ### Transcricao em tempo real
@@ -207,7 +222,7 @@ Campos:
 WebSocket: /api/v1/transcribe/realtime
 
 Mensagem de configuracao (JSON):
-  { "type": "config", "model": "turbo", "action": "transcribe", "target_language": null }
+  { "type": "config", "model": "turbo", "action": "transcribe" }
 
 Apos configurado, envie chunks de audio como dados binarios.
 ```
@@ -252,6 +267,17 @@ make test-integration    # Frontend + backend como processos reais
 make verify         # Backend rapido + frontend
 ```
 
+### Docker
+
+```bash
+./scripts.sh docker-build
+./scripts.sh docker-up
+./scripts.sh docker-down
+./scripts.sh docker-ps
+./scripts.sh docker-logs
+./scripts.sh docker-logs app
+```
+
 ## Resolucao de problemas
 
 **Container sai com codigo 137 (Out of Memory)**
@@ -261,4 +287,10 @@ O Docker nao tem memoria suficiente. Acesse Docker Desktop > Settings > Resource
 Verifique se o backend esta rodando em `http://localhost:8000`. Em modo de desenvolvimento o Vite faz proxy automatico das chamadas `/api` e `/health` para o backend.
 
 **Modelo Whisper nao carrega**
-Verifique se ha espaco em disco suficiente e conexao com a internet na primeira execucao. Os modelos sao salvos em `./whisper_models/`.
+Verifique se ha espaco em disco suficiente e conexao com a internet na primeira execucao. Os modelos sao salvos em `./.whisper_models/`.
+
+**Erro informando que `ffmpeg` nao foi encontrado**
+Instale o `ffmpeg` no sistema e confirme que o binario esta acessivel no `PATH` com `ffmpeg -version`.
+
+**Backend sobe, mas nao serve o frontend**
+Esse comportamento e esperado no modo atual. O frontend roda como processo separado em desenvolvimento e como servico separado no `docker-compose.yml`. Se precisar servir `frontend/dist` pelo backend, defina `VBZ_SERVE_FRONTEND_DIST=true`.

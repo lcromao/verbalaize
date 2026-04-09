@@ -4,7 +4,7 @@ import os
 import tempfile
 import warnings
 from collections import defaultdict
-from typing import Any, Dict, Optional
+from typing import Any, Callable, Dict
 
 from fastapi import HTTPException, UploadFile
 
@@ -122,7 +122,6 @@ class WhisperService:
         model: Any,
         file_path: str,
         action: ActionType,
-        target_language: Optional[str] = None,
     ) -> str:
         """Execute transcription with model in executor to avoid blocking"""
         loop = asyncio.get_running_loop()
@@ -133,29 +132,41 @@ class WhisperService:
 
             if action == ActionType.TRANSCRIBE:
                 return model.transcribe(file_path, **kwargs)
-            elif action == ActionType.TRANSLATE_ENGLISH:
+            if action == ActionType.TRANSLATE_ENGLISH:
                 return model.transcribe(file_path, task="translate", **kwargs)
-            elif action == ActionType.TRANSLATE_LANGUAGE:
-                # For custom language translation, we first transcribe then
-                # would need additional translation service (not implemented)
-                return model.transcribe(file_path, **kwargs)
-                # TODO: Implement translation to target_language
-            else:
-                return model.transcribe(file_path, **kwargs)
+
+            return model.transcribe(file_path, **kwargs)
 
         result = await loop.run_in_executor(None, _transcribe)
         return result["text"].strip()
 
-    async def transcribe_file(
+    async def _emit_progress_heartbeat(
         self,
-        file: UploadFile,
-        model_type: ModelType,
-        action: ActionType,
-        target_language: Optional[str] = None,
-    ) -> TranscriptionResponse:
-        """Transcribe uploaded audio file"""
+        on_progress: Callable[[int, str], None] | None,
+        stage: str,
+        start_progress: int,
+        end_progress: int,
+        stop_event: asyncio.Event,
+        interval_seconds: float = 0.35,
+    ) -> None:
+        if on_progress is None or end_progress <= start_progress:
+            return
 
-        # Validate file type
+        current_progress = start_progress
+        on_progress(current_progress, stage)
+
+        while not stop_event.is_set():
+            await asyncio.sleep(interval_seconds)
+            if stop_event.is_set():
+                break
+
+            if current_progress < end_progress:
+                current_progress += 1
+                on_progress(current_progress, stage)
+
+    def _validate_audio_file(
+        self, filename: str | None, content_type: str | None
+    ) -> str:
         allowed_extensions = {
             ".mp3",
             ".m4a",
@@ -171,13 +182,10 @@ class WhisperService:
         }
 
         file_extension = None
-        if file.filename:
-            file_extension = f".{file.filename.split('.')[-1].lower()}"
+        if filename:
+            file_extension = f".{filename.split('.')[-1].lower()}"
 
-        # Check content type first, then fallback to file extension
-        is_valid_content_type = (
-            file.content_type in settings.allowed_file_types
-        )
+        is_valid_content_type = content_type in settings.allowed_file_types
         is_valid_extension = (
             file_extension in allowed_extensions if file_extension else False
         )
@@ -188,44 +196,116 @@ class WhisperService:
             )
             raise HTTPException(
                 status_code=400,
-                detail=f"Unsupported file type: {file.content_type}. "
+                detail=f"Unsupported file type: {content_type}. "
                 f"Supported formats: {supported_formats}",
             )
 
-        # Create temporary file
-        file_extension = (
-            f".{file.filename.split('.')[-1]}" if file.filename else ".wav"
+        return file_extension or ".wav"
+
+    async def transcribe_file_path(
+        self,
+        file_path: str,
+        filename: str | None,
+        content_type: str | None,
+        model_type: ModelType,
+        action: ActionType,
+        on_progress: Callable[[int, str], None] | None = None,
+    ) -> TranscriptionResponse:
+        file_extension = self._validate_audio_file(filename, content_type)
+
+        if not file_path.endswith(file_extension) and filename:
+            logger.debug(
+                "Processing file path %s with original filename %s",
+                file_path,
+                filename,
+            )
+
+        if on_progress is not None:
+            on_progress(15, "audio_received")
+
+        try:
+            if on_progress is not None:
+                on_progress(25, "loading_model")
+
+            load_stop_event = asyncio.Event()
+            load_progress_task = asyncio.create_task(
+                self._emit_progress_heartbeat(
+                    on_progress=on_progress,
+                    stage="loading_model",
+                    start_progress=25,
+                    end_progress=54,
+                    stop_event=load_stop_event,
+                )
+            )
+            try:
+                model = await self._get_model(model_type)
+            finally:
+                load_stop_event.set()
+                await load_progress_task
+
+            if on_progress is not None:
+                on_progress(55, "model_ready")
+                on_progress(60, "transcribing")
+
+            transcription_stop_event = asyncio.Event()
+            transcription_progress_task = asyncio.create_task(
+                self._emit_progress_heartbeat(
+                    on_progress=on_progress,
+                    stage="transcribing",
+                    start_progress=60,
+                    end_progress=94,
+                    stop_event=transcription_stop_event,
+                )
+            )
+            try:
+                text_result = await self._transcribe_with_model(
+                    model, file_path, action
+                )
+            finally:
+                transcription_stop_event.set()
+                await transcription_progress_task
+
+            if on_progress is not None:
+                on_progress(95, "finalizing")
+
+            return TranscriptionResponse(
+                model=model_type.value,
+                action=action.value,
+                text=text_result,
+            )
+        except HTTPException:
+            raise
+        except Exception as e:
+            raise HTTPException(
+                status_code=500, detail=f"Transcription failed: {str(e)}"
+            )
+
+    async def transcribe_file(
+        self,
+        file: UploadFile,
+        model_type: ModelType,
+        action: ActionType,
+    ) -> TranscriptionResponse:
+        """Transcribe uploaded audio file"""
+
+        file_extension = self._validate_audio_file(
+            file.filename, file.content_type
         )
         with tempfile.NamedTemporaryFile(
             delete=False, suffix=file_extension
         ) as temp_file:
             try:
-                # Write uploaded file content to temporary file
                 content = await file.read()
                 temp_file.write(content)
                 temp_file.flush()
-
-                # Load model
-                model = await self._get_model(model_type)
-
-                # Transcribe using helper method
-                text_result = await self._transcribe_with_model(
-                    model, temp_file.name, action, target_language
-                )
-
-                return TranscriptionResponse(
-                    model=model_type.value,
-                    action=action.value,
-                    text=text_result,
-                    target_language=target_language,
-                )
-
-            except Exception as e:
-                raise HTTPException(
-                    status_code=500, detail=f"Transcription failed: {str(e)}"
+                return await self.transcribe_file_path(
+                    file_path=temp_file.name,
+                    filename=file.filename,
+                    content_type=file.content_type,
+                    model_type=model_type,
+                    action=action,
                 )
             finally:
-                # Clean up temporary file
                 if os.path.exists(temp_file.name):
                     os.unlink(temp_file.name)
 
@@ -234,7 +314,6 @@ class WhisperService:
         audio_data: bytes,
         model_type: ModelType,
         action: ActionType,
-        target_language: Optional[str] = None,
     ) -> str:
         """Transcribe real-time audio chunk"""
 
@@ -261,7 +340,7 @@ class WhisperService:
                 # Transcribe chunk with error handling
                 try:
                     transcription = await self._transcribe_with_model(
-                        model, temp_file.name, action, target_language
+                        model, temp_file.name, action
                     )
 
                     logger.debug(f"Transcription result: '{transcription}'")

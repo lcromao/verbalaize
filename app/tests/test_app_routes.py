@@ -17,3 +17,9 @@ def test_health_endpoints(client):
 
     assert api_response.status_code == 200
     assert api_response.json()["service"] == "verbalaize-api"
+
+
+def test_unknown_route_is_not_mapped_to_frontend_dist(client):
+    response = client.get("/rota-inexistente")
+
+    assert response.status_code == 404
