@@ -1,15 +1,12 @@
 import { useState, useRef, useEffect, useMemo } from 'react';
-import { useTranscriptionStore } from '@/hooks/useTranscriptionStore';
-import { FfmpegInstallAlert } from '@/components/FfmpegInstallAlert';
-import { ProcessingStatus } from '@/components/ProcessingStatus';
+import { WhisperModel, useTranscriptionStore } from '@/hooks/useTranscriptionStore';
+import { useHistoryStore } from '@/hooks/useHistoryStore';
 import { Button } from '@/components/ui/button';
-import { Card } from '@/components/ui/card';
 import { Textarea } from '@/components/ui/textarea';
-import { Badge } from '@/components/ui/badge';
-import { Mic, MicOff, Square, Play, Loader2 } from 'lucide-react';
+import { Mic, MicOff, Square, Loader2, Copy, Trash2 } from 'lucide-react';
 import { toast } from '@/hooks/use-toast';
 import { ApiService } from '@/services/api';
-import { isFfmpegMissingError } from '@/lib/transcriptionErrors';
+import { getPreferredModelForAction } from '@/lib/modelCatalog';
 
 const RealTimeTranscription = () => {
   const [isRecording, setIsRecording] = useState(false);
@@ -17,41 +14,76 @@ const RealTimeTranscription = () => {
   const [segments, setSegments] = useState<string[]>([]);
   const [partialText, setPartialText] = useState('');
   const [recordingTime, setRecordingTime] = useState(0);
-  const [ffmpegNotice, setFfmpegNotice] = useState<string | null>(null);
-  
+
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const websocketRef = useRef<WebSocket | null>(null);
   const audioStreamRef = useRef<MediaStream | null>(null);
-  const timerRef = useRef<NodeJS.Timeout | null>(null);
-  
-  const { model, action } = useTranscriptionStore();
+  const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const segmentsRef = useRef<string[]>([]);
+  const partialTextRef = useRef('');
+  const activeModelRef = useRef<WhisperModel>('turbo');
 
-  // Combine segments and partial text for live display
+  const { model, action } = useTranscriptionStore();
+  const { entries, selectedId, addEntry, selectEntry } = useHistoryStore();
+
+  const updateSegments = (
+    next:
+      | string[]
+      | ((previous: string[]) => string[]),
+  ) => {
+    setSegments((previous) => {
+      const resolved =
+        typeof next === 'function'
+          ? next(previous)
+          : next;
+      segmentsRef.current = resolved;
+      return resolved;
+    });
+  };
+
+  const updatePartialText = (next: string) => {
+    partialTextRef.current = next;
+    setPartialText(next);
+  };
+
   const liveText = useMemo(() => {
-    const allText = [...segments, partialText].filter(text => text.trim()).join(' ');
-    return allText;
+    return [...segments, partialText].filter(t => t.trim()).join(' ');
   }, [segments, partialText]);
 
   useEffect(() => {
+    if (isRecording) return;
+
+    if (!selectedId) {
+      updateSegments([]);
+      updatePartialText('');
+      return;
+    }
+
+    const entry = entries.find((item) => item.id === selectedId && item.type === 'realtime');
+    if (!entry) return;
+
+    updateSegments(entry.text ? [entry.text] : []);
+    updatePartialText('');
+  }, [entries, isRecording, selectedId]);
+
+  useEffect(() => {
     return () => {
-      if (timerRef.current) {
-        clearInterval(timerRef.current);
-      }
-      if (websocketRef.current) {
-        websocketRef.current.close();
-      }
-      if (audioStreamRef.current) {
-        audioStreamRef.current.getTracks().forEach(track => track.stop());
-      }
-      // Clean up slice timer if exists
+      if (timerRef.current) clearInterval(timerRef.current);
+      if (websocketRef.current) websocketRef.current.close();
+      if (audioStreamRef.current)
+        audioStreamRef.current.getTracks().forEach(t => t.stop());
       if (mediaRecorderRef.current) {
-        const mediaRecorder = mediaRecorderRef.current as MediaRecorder & { __sliceTimer?: NodeJS.Timeout };
-        if (mediaRecorder.__sliceTimer) {
-          clearInterval(mediaRecorder.__sliceTimer);
-        }
+        const mr = mediaRecorderRef.current as MediaRecorder & { __sliceTimer?: ReturnType<typeof setTimeout> };
+        if (mr.__sliceTimer) clearInterval(mr.__sliceTimer);
       }
     };
   }, []);
+
+  const getCurrentTranscript = () => {
+    return [...segmentsRef.current, partialTextRef.current]
+      .filter(text => text.trim())
+      .join(' ');
+  };
 
   const startTimer = () => {
     timerRef.current = setInterval(() => {
@@ -68,509 +100,413 @@ const RealTimeTranscription = () => {
   };
 
   const formatTime = (seconds: number) => {
-    const mins = Math.floor(seconds / 60);
-    const secs = seconds % 60;
-    return `${mins.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`;
+    const m = Math.floor(seconds / 60).toString().padStart(2, '0');
+    const s = (seconds % 60).toString().padStart(2, '0');
+    return `${m}:${s}`;
   };
 
-  const connectWebSocket = () => {
+  const connectWebSocket = (resolvedModel: typeof model) => {
     return new Promise((resolve, reject) => {
+      let configAcknowledged = false;
+      let settled = false;
+      let timeoutId: ReturnType<typeof setTimeout> | null = null;
+
+      const rejectConnection = (error: unknown) => {
+        if (settled) return;
+        settled = true;
+        if (timeoutId) {
+          clearTimeout(timeoutId);
+        }
+        reject(error instanceof Error ? error : new Error('WebSocket connection failed'));
+      };
+
+      const resolveConnection = () => {
+        if (settled) return;
+        settled = true;
+        if (timeoutId) {
+          clearTimeout(timeoutId);
+        }
+        resolve(true);
+      };
+
       try {
-        console.log('🔗 Iniciando conexão WebSocket...');
-        
         websocketRef.current = ApiService.createRealtimeWebSocket();
-        
-        // Track if config was acknowledged
-        let configAcknowledged = false;
-        
+
         websocketRef.current.onopen = () => {
-          console.log('✅ WebSocket opened successfully, sending config...');
-          console.log('🔍 WebSocket readyState:', websocketRef.current?.readyState);
-          
-          // Send configuration immediately
           const config = {
             type: 'config',
-            model,
+            model: resolvedModel,
             action,
           };
-          console.log('📤 Sending config:', config);
-          
           if (websocketRef.current?.readyState === WebSocket.OPEN) {
             try {
               websocketRef.current.send(JSON.stringify(config));
-              console.log('✅ Configuration sent successfully');
             } catch (error) {
-              console.error('❌ Error sending configuration:', error);
-              reject(error);
+              rejectConnection(error);
             }
           } else {
-            console.error('❌ WebSocket not in OPEN state:', websocketRef.current?.readyState);
-            reject(new Error('WebSocket not ready'));
+            rejectConnection(new Error('WebSocket not ready'));
           }
         };
 
-        websocketRef.current.onmessage = (event) => {
+        websocketRef.current.onmessage = event => {
           try {
             const data = JSON.parse(event.data);
-            console.log('📥 Received WebSocket message:', data);
-            
+
             if (data.type === 'config_ack') {
-              console.log('✅ Configuration acknowledged');
               if (!configAcknowledged) {
                 configAcknowledged = true;
                 setIsConnected(true);
-                setFfmpegNotice(null);
-                toast({
-                  title: "Conectado!",
-                  description: "Conexão estabelecida com o servidor de transcrição.",
-                });
-                resolve(true);
+                toast({ title: 'Conectado ao servidor de transcrição' });
+                resolveConnection();
               }
               return;
             }
-            
+
             if (data.type === 'error') {
-              console.error('❌ WebSocket error:', data.message);
-
-              if (isFfmpegMissingError(String(data.message))) {
-                setFfmpegNotice(data.message);
-                return;
+              toast({ title: 'Erro na transcrição', description: data.message, variant: 'destructive' });
+              if (!configAcknowledged) {
+                websocketRef.current?.close();
+                rejectConnection(new Error(data.message || 'Invalid realtime configuration'));
               }
-
-              toast({
-                title: "Erro na transcrição",
-                description: data.message,
-                variant: "destructive"
-              });
               return;
             }
-            
-            // Handle transcription messages
+
             if (data.text) {
               if (data.is_final_segment) {
-                // Final segment of the entire session
-                setSegments(prev => [...prev, data.text]);
-                setPartialText('');
+                updateSegments(prev => [...prev, data.text]);
+                updatePartialText('');
               } else if (data.is_partial) {
-                // Partial result - just preview, don't save yet
-                setPartialText(data.text);
+                updatePartialText(data.text);
               } else {
-                // Completed chunk but not final segment
-                setSegments(prev => {
-                  // Avoid duplicates by checking if last segment ends with this text
-                  const lastSegment = prev[prev.length - 1] || '';
-                  if (lastSegment.endsWith(data.text.trim())) {
-                    return prev;
-                  }
+                updateSegments(prev => {
+                  const last = prev[prev.length - 1] || '';
+                  if (last.endsWith(data.text.trim())) return prev;
                   return [...prev, data.text];
                 });
-                setPartialText('');
+                updatePartialText('');
               }
             }
-          } catch (error) {
-            console.error('❌ Error parsing WebSocket message:', error);
+          } catch {
+            // ignore parse errors
           }
         };
 
-        websocketRef.current.onclose = (event) => {
-          console.log('🔚 WebSocket closed:', event.code, event.reason);
+        websocketRef.current.onclose = () => {
           setIsConnected(false);
-          toast({
-            title: "Desconectado",
-            description: "Conexão com o servidor foi perdida.",
-          });
-        };
-
-        websocketRef.current.onerror = (error) => {
-          console.error('❌ WebSocket error:', error);
-          toast({
-            title: "Erro de conexão",
-            description: "Erro na conexão WebSocket.",
-            variant: "destructive"
-          });
-          reject(error);
-        };
-
-        // Timeout para conexão
-        setTimeout(() => {
           if (!configAcknowledged) {
-            console.error('⏰ Configuration timeout - no config_ack received');
-            console.log('🔍 WebSocket final state:', websocketRef.current?.readyState);
-            websocketRef.current?.close();
-            reject(new Error('Configuration timeout'));
+            rejectConnection(new Error('Connection closed before configuration was acknowledged'));
           }
-        }, 10000); // Aumentar timeout para 10 segundos
+        };
 
+        websocketRef.current.onerror = error => {
+          toast({ title: 'Erro de conexão', description: 'Não foi possível conectar.', variant: 'destructive' });
+          rejectConnection(error);
+        };
+
+        timeoutId = setTimeout(() => {
+          if (!configAcknowledged) {
+            websocketRef.current?.close();
+            rejectConnection(new Error('Configuration timeout'));
+          }
+        }, 10000);
       } catch (error) {
-        console.error('❌ Failed to create WebSocket:', error);
-        toast({
-          title: "Erro de conexão",
-          description: "Não foi possível conectar ao servidor de transcrição.",
-          variant: "destructive"
-        });
-        reject(error);
+        toast({ title: 'Erro de conexão', variant: 'destructive' });
+        rejectConnection(error);
       }
     });
   };
 
   const startRecording = async () => {
     try {
-      console.log('🎙️ Getting user media...');
-      const stream = await navigator.mediaDevices.getUserMedia({ 
-        audio: { 
-          sampleRate: 16000,
-          channelCount: 1,
-          echoCancellation: true,
-          noiseSuppression: true
-        } 
+      const resolvedModel = getPreferredModelForAction(
+        action,
+        ['small', 'medium', 'turbo'],
+      );
+      if (!resolvedModel) {
+        toast({
+          title: 'Modelo incompatível',
+          description: 'Selecione um modelo compatível com a ação escolhida.',
+          variant: 'destructive',
+        });
+        return;
+      }
+
+      selectEntry(null);
+      updateSegments([]);
+      updatePartialText('');
+
+      const stream = await navigator.mediaDevices.getUserMedia({
+        audio: { sampleRate: 16000, channelCount: 1, echoCancellation: true, noiseSuppression: true },
       });
-      
+
       audioStreamRef.current = stream;
-      
-      // Try OGG first as it tends to generate better standalone chunks
+
       let mimeType = 'audio/ogg;codecs=opus';
-      
-      // Fallback to WebM if OGG is not supported
       if (!MediaRecorder.isTypeSupported(mimeType)) {
         mimeType = 'audio/webm;codecs=opus';
-        console.log('📢 OGG not supported, using WebM');
-      } else {
-        console.log('📢 Using OGG format for better chunk compatibility');
       }
-      
+
       const mediaRecorder = new MediaRecorder(stream, { mimeType });
       mediaRecorderRef.current = mediaRecorder;
-      
-      mediaRecorder.ondataavailable = async (event) => {
-        console.log('📊 Audio data available:', event.data.size, 'bytes');
-        
-        if (event.data.size === 0) {
-          console.warn('⚠️ Received empty audio data');
-          return;
-        }
-        
-        if (websocketRef.current?.readyState !== WebSocket.OPEN) {
-          console.warn('⚠️ WebSocket not ready, current state:', websocketRef.current?.readyState);
-          return;
-        }
-        
+
+      mediaRecorder.ondataavailable = async event => {
+        if (event.data.size === 0) return;
+        if (websocketRef.current?.readyState !== WebSocket.OPEN) return;
+
         try {
-          // Convert blob to ArrayBuffer and send as binary data
           const arrayBuffer = await event.data.arrayBuffer();
-          console.log('📤 Sending audio chunk:', arrayBuffer.byteLength, 'bytes');
           websocketRef.current.send(arrayBuffer);
-        } catch (error) {
-          console.error('❌ Error converting audio to ArrayBuffer:', error);
+        } catch {
+          // ignore send errors
         }
       };
-      
-      // Connect WebSocket first and wait for config acknowledgment
-      console.log('🔗 Connecting WebSocket...');
-      await connectWebSocket();
-      
-      console.log('🎤 Starting MediaRecorder...');
-      
-      // Use stop/start approach to guarantee complete containers
-      // This ensures each blob is a complete audio file with proper headers
+
+      await connectWebSocket(resolvedModel);
+      activeModelRef.current = resolvedModel;
+
       mediaRecorder.start();
-      
-      const SLICE_MS = 3000; // 3 seconds for better audio quality and valid containers
+
+      const SLICE_MS = 3000;
       let isSlicing = false;
-      
+
       const sliceTimer = setInterval(() => {
         if (mediaRecorder.state === 'recording' && !isSlicing) {
           isSlicing = true;
-          console.log('🪚 Creating new audio segment...');
-          
-          // Stop current recording to finalize the container
           mediaRecorder.stop();
         }
       }, SLICE_MS);
-      
-      // Restart recording immediately after stopping to create continuous stream
+
       mediaRecorder.onstop = () => {
         if (mediaRecorderRef.current && isSlicing) {
-          console.log('🔄 Restarting MediaRecorder for next segment...');
           mediaRecorder.start();
           isSlicing = false;
         }
       };
-      
-      // Store timer reference for cleanup
-      (mediaRecorder as MediaRecorder & { __sliceTimer?: NodeJS.Timeout }).__sliceTimer = sliceTimer;
-      
+
+      (mediaRecorder as MediaRecorder & { __sliceTimer?: ReturnType<typeof setTimeout> }).__sliceTimer = sliceTimer;
+
       setIsRecording(true);
-      setFfmpegNotice(null);
       startTimer();
-      
-      toast({
-        title: "Gravação iniciada",
-        description: "Fale próximo ao microfone para começar a transcrição.",
-      });
-      
+
+      toast({ title: 'Gravação iniciada', description: 'Fale próximo ao microfone.' });
     } catch (error) {
-      console.error('❌ Error in startRecording:', error);
+      const description =
+        error instanceof Error && error.message
+          ? error.message
+          : 'Verifique as permissões do microfone e a conexão com o backend.';
+
       toast({
-        title: "Erro no microfone",
-        description: "Não foi possível acessar o microfone. Verifique as permissões.",
-        variant: "destructive"
+        title: 'Erro ao iniciar gravação',
+        description,
+        variant: 'destructive',
       });
-      
-      // Cleanup on error
-      if (audioStreamRef.current) {
-        audioStreamRef.current.getTracks().forEach(track => track.stop());
-      }
+      if (audioStreamRef.current)
+        audioStreamRef.current.getTracks().forEach(t => t.stop());
     }
   };
 
   const stopRecording = async () => {
-    if (mediaRecorderRef.current && isRecording) {
-      // Clear the slice timer
-      const mediaRecorder = mediaRecorderRef.current as MediaRecorder & { __sliceTimer?: NodeJS.Timeout };
-      if (mediaRecorder.__sliceTimer) {
-        console.log('🧹 Clearing slice timer...');
-        clearInterval(mediaRecorder.__sliceTimer);
-        mediaRecorder.__sliceTimer = undefined;
-      }
-      
-      // Request final data before stopping
-      console.log('📦 Requesting final audio data...');
-      mediaRecorderRef.current.requestData();
-      mediaRecorderRef.current.stop();
-      setIsRecording(false);
-      stopTimer();
-      
-      if (audioStreamRef.current) {
-        audioStreamRef.current.getTracks().forEach(track => track.stop());
-      }
-      
-      // Send flush request and wait for final transcription
-      if (websocketRef.current && websocketRef.current.readyState === WebSocket.OPEN) {
-        console.log('🚽 Sending flush request...');
-        
-        try {
-          await new Promise<void>((resolve) => {
-            const ws = websocketRef.current;
-            if (!ws) {
-              resolve();
-              return;
-            }
+    if (!mediaRecorderRef.current || !isRecording) return;
 
-            const flushHandler = (event: MessageEvent) => {
-              try {
-                const data = JSON.parse(event.data);
-                console.log('📥 Received flush response:', data);
-                
-                if (data.type === 'done') {
-                  console.log('✅ Flush completed, cleaning up...');
-                  ws.removeEventListener('message', flushHandler);
-                  resolve();
-                }
-                
-                // Handle final transcription segment
-                if (data.text && data.is_final_segment) {
-                  console.log('📝 Adding final segment:', data.text);
-                  setSegments(prev => [...prev, data.text]);
-                  setPartialText('');
-                }
-              } catch (err) {
-                console.error('❌ Error parsing flush response:', err);
+    const mediaRecorder = mediaRecorderRef.current as MediaRecorder & { __sliceTimer?: ReturnType<typeof setTimeout> };
+    if (mediaRecorder.__sliceTimer) {
+      clearInterval(mediaRecorder.__sliceTimer);
+      mediaRecorder.__sliceTimer = undefined;
+    }
+
+    mediaRecorderRef.current.requestData();
+    mediaRecorderRef.current.stop();
+    setIsRecording(false);
+    stopTimer();
+
+    if (audioStreamRef.current)
+      audioStreamRef.current.getTracks().forEach(t => t.stop());
+
+    if (websocketRef.current?.readyState === WebSocket.OPEN) {
+      try {
+        await new Promise<void>(resolve => {
+          const ws = websocketRef.current;
+          if (!ws) { resolve(); return; }
+
+          const flushHandler = (event: MessageEvent) => {
+            try {
+              const data = JSON.parse(event.data);
+              if (data.type === 'done') {
                 ws.removeEventListener('message', flushHandler);
+                clearTimeout(timeoutId);
                 resolve();
               }
-            };
-
-            // Set up timeout to prevent hanging
-            const timeoutId = setTimeout(() => {
-              console.log('⏰ Flush timeout, forcing cleanup...');
+            } catch {
               ws.removeEventListener('message', flushHandler);
-              resolve();
-            }, 10000); // 10 second timeout
-
-            ws.addEventListener('message', flushHandler);
-            
-            // Send flush request
-            ws.send(JSON.stringify({ type: 'flush' }));
-            
-            // Clear timeout when resolved
-            const originalResolve = resolve;
-            resolve = () => {
               clearTimeout(timeoutId);
-              originalResolve();
-            };
-          });
-        } catch (error) {
-          console.error('❌ Error during flush:', error);
-        }
-        
-        // Close WebSocket after flush
-        websocketRef.current.close(1000, 'client-finished');
-        setIsConnected(false);
+              resolve();
+            }
+          };
+
+          const timeoutId = setTimeout(() => {
+            ws.removeEventListener('message', flushHandler);
+            resolve();
+          }, 10000);
+
+          ws.addEventListener('message', flushHandler);
+          ws.send(JSON.stringify({ type: 'flush' }));
+        });
+      } catch {
+        // ignore
       }
-      
-      toast({
-        title: "Gravação finalizada",
-        description: "A transcrição foi concluída.",
+
+      websocketRef.current.close(1000, 'client-finished');
+      setIsConnected(false);
+    }
+
+    const finalTranscript = getCurrentTranscript();
+    if (finalTranscript) {
+      addEntry({
+        title: finalTranscript.slice(0, 80),
+        text: finalTranscript,
+        type: 'realtime',
+        model: activeModelRef.current,
+        action,
       });
     }
+
+    toast({ title: 'Gravação finalizada' });
   };
 
   const clearTranscription = () => {
-    setSegments([]);
-    setPartialText('');
-    setFfmpegNotice(null);
-  };
-
-  const liveStatusTitle = isRecording ? 'Transcrição em andamento' : 'Aguardando áudio';
-
-  const testWebSocketConnection = async () => {
-    try {
-      console.log('🧪 Testing WebSocket connection...');
-      await connectWebSocket();
-      console.log('✅ WebSocket test successful');
-    } catch (error) {
-      console.error('❌ WebSocket test failed:', error);
-    }
+    selectEntry(null);
+    updateSegments([]);
+    updatePartialText('');
   };
 
   return (
-    <div className="max-w-4xl mx-auto space-y-6">
-      <div className="text-center">
-        <h2 className="text-3xl font-bold mb-2">Transcrição em Tempo Real</h2>
-        <p className="text-muted-foreground">
+    <div className="max-w-3xl mx-auto space-y-8">
+      {/* Page Header */}
+      <div>
+        <h2 className="text-xl font-semibold tracking-tight">Transcrição em Tempo Real</h2>
+        <p className="text-sm text-muted-foreground mt-1">
           Fale no microfone e veja a transcrição aparecer instantaneamente
         </p>
       </div>
 
-      {/* Recording Controls */}
-      <Card className="p-8">
-        <div className="text-center space-y-6">
-          {/* Status Badges */}
-          <div className="flex justify-center gap-4">
-            <Badge variant={isConnected ? "default" : "secondary"}>
-              {isConnected ? "Conectado" : "Desconectado"}
-            </Badge>
-            <Badge variant={isRecording ? "destructive" : "secondary"}>
-              {isRecording ? "Gravando" : "Parado"}
-            </Badge>
-            {isRecording && (
-              <Badge variant="outline">
-                {formatTime(recordingTime)}
-              </Badge>
-            )}
-          </div>
-
-          {/* Recording Button */}
-          <div className="space-y-4">
-            {!isRecording ? (
-              <Button
-                onClick={startRecording}
-                size="lg"
-                className="w-48 h-16 text-lg"
-              >
-                <Play className="w-6 h-6 mr-2" />
-                Iniciar Transcrição
-              </Button>
+      {/* Recording Control */}
+      <div className="flex flex-col items-center gap-6 py-6">
+        {/* Mic Button */}
+        <div className="relative flex items-center justify-center">
+          {/* Outer animated rings when recording */}
+          {isRecording && (
+            <>
+              <span className="absolute w-24 h-24 rounded-full bg-destructive/20 animate-ping" />
+              <span className="absolute w-28 h-28 rounded-full border-2 border-destructive/30 animate-pulse" />
+            </>
+          )}
+          <button
+            onClick={isRecording ? stopRecording : startRecording}
+            className={`
+              relative z-10 w-20 h-20 rounded-full flex items-center justify-center transition-all duration-300 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2
+              ${isRecording
+                ? 'bg-destructive text-destructive-foreground animate-recording shadow-lg shadow-destructive/40 scale-110'
+                : 'bg-primary text-primary-foreground hover:opacity-90 hover:scale-105 shadow-md shadow-primary/20'
+              }
+            `}
+            aria-label={isRecording ? 'Parar gravação' : 'Iniciar gravação'}
+          >
+            {isRecording ? (
+              <Square className="w-7 h-7 fill-current" />
             ) : (
-              <Button
-                onClick={stopRecording}
-                variant="destructive"
-                size="lg"
-                className="w-48 h-16 text-lg"
-              >
-                <Square className="w-6 h-6 mr-2" />
-                Parar Transcrição
-              </Button>
+              <Mic className="w-7 h-7" />
             )}
-            
-            <div className="flex justify-center gap-2">
-              <Button
-                variant="outline"
-                onClick={clearTranscription}
-                disabled={isRecording}
-              >
-                Limpar Texto
-              </Button>
-              <Button
-                variant="outline"
-                onClick={testWebSocketConnection}
-                disabled={isRecording}
-              >
-                Testar Conexão
-              </Button>
-            </div>
-          </div>
-
-          {/* Microphone Visualization */}
-          <div className="flex justify-center">
-            <div className={`w-24 h-24 rounded-full flex items-center justify-center transition-all duration-300 ${
-              isRecording 
-                ? 'bg-red-100 dark:bg-red-900/20 animate-pulse' 
-                : 'bg-muted'
-            }`}>
-              {isRecording ? (
-                <Mic className="w-12 h-12 text-red-600" />
-              ) : (
-                <MicOff className="w-12 h-12 text-muted-foreground" />
-              )}
-            </div>
-          </div>
+          </button>
         </div>
 
-        {ffmpegNotice && (
-          <FfmpegInstallAlert detail={ffmpegNotice} modeLabel="tempo real" />
-        )}
-      </Card>
+        {/* Status Row */}
+        <div className="flex items-center gap-3 text-sm">
+          {isRecording ? (
+            <>
+              <span className="flex items-center gap-1.5 text-destructive font-medium">
+                <span className="w-1.5 h-1.5 rounded-full bg-destructive animate-pulse" />
+                Gravando
+              </span>
+              <span className="text-muted-foreground font-mono">{formatTime(recordingTime)}</span>
+            </>
+          ) : (
+            <span className={`flex items-center gap-1.5 text-muted-foreground`}>
+              <MicOff className="w-3.5 h-3.5" />
+              Clique para iniciar
+            </span>
+          )}
+
+          {isConnected && !isRecording && (
+            <span className="flex items-center gap-1 text-xs text-muted-foreground">
+              <span className="w-1.5 h-1.5 rounded-full bg-emerald-500" />
+              Conectado
+            </span>
+          )}
+        </div>
+      </div>
 
       {/* Live Transcription */}
-      <Card className="p-6">
-        <div className="flex justify-between items-center mb-4">
-          <h3 className="text-lg font-semibold">Transcrição ao Vivo</h3>
-          {isRecording && (
-            <div className="flex items-center gap-2 text-sm text-muted-foreground">
-              <Loader2 className="w-4 h-4 animate-spin" />
-              Processando...
+      <div className="space-y-3">
+        <div className="flex items-center justify-between">
+          <div className="flex items-center gap-2">
+            <h3 className="text-sm font-medium">Transcrição ao Vivo</h3>
+            {isRecording && (
+              <span className="flex items-center gap-1 text-xs text-muted-foreground">
+                <Loader2 className="w-3 h-3 animate-spin" />
+                Processando
+              </span>
+            )}
+          </div>
+
+          {(liveText || partialText) && (
+            <div className="flex gap-1">
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={() => {
+                  navigator.clipboard.writeText(liveText);
+                  toast({ title: 'Copiado para a área de transferência' });
+                }}
+                className="h-7 px-2 text-xs gap-1.5"
+              >
+                <Copy className="w-3 h-3" />
+                Copiar
+              </Button>
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={clearTranscription}
+                disabled={isRecording}
+                className="h-7 px-2 text-xs gap-1.5 text-muted-foreground"
+              >
+                <Trash2 className="w-3 h-3" />
+                Limpar
+              </Button>
             </div>
           )}
         </div>
 
-        <ProcessingStatus
-          title={liveStatusTitle}
-        />
-        
         <Textarea
           value={liveText}
-          onChange={(e) => {
-            // Allow editing only when not recording
+          onChange={e => {
             if (!isRecording) {
-              // Update segments array with edited text
-              const editedText = e.target.value;
-              setSegments(editedText ? [editedText] : []);
-              setPartialText('');
+              const text = e.target.value;
+              updateSegments(text ? [text] : []);
+              updatePartialText('');
             }
           }}
           placeholder="A transcrição aparecerá aqui conforme você fala..."
-          className="min-h-64 resize-y"
+          className="min-h-64 resize-y text-sm leading-relaxed bg-card"
           readOnly={isRecording}
         />
-        
+
         {partialText && (
-          <p className="text-sm text-muted-foreground mt-2">
+          <p className="text-xs text-muted-foreground px-1">
             <span className="font-medium">Processando:</span> {partialText}
           </p>
         )}
-
-        {liveText && (
-          <div className="flex justify-end mt-4">
-            <Button
-              variant="outline"
-              onClick={() => navigator.clipboard.writeText(liveText)}
-            >
-              Copiar Texto
-            </Button>
-          </div>
-        )}
-      </Card>
+      </div>
     </div>
   );
 };

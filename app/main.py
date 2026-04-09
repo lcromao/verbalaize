@@ -7,7 +7,8 @@ from fastapi.middleware.cors import CORSMiddleware
 from starlette.staticfiles import StaticFiles
 
 from app.core.config import settings
-from app.routes import transcription
+from app.middleware.token import AppSecretMiddleware
+from app.routes import models, transcription
 from app.schemas.transcription import ModelType
 from app.services.whisper_service import get_whisper_service
 
@@ -26,6 +27,11 @@ logger = logging.getLogger(__name__)
 async def lifespan(app: FastAPI):
     """Preload models on startup to avoid first-request delays."""
     logger.info(f"Starting {settings.app_name} v{settings.app_version}")
+    if settings.disable_startup_preload:
+        logger.info("Startup preload disabled by configuration")
+        yield
+        return
+
     try:
         logger.info("Preloading Whisper models...")
         whisper_service = get_whisper_service()
@@ -46,24 +52,25 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
+# Secret token middleware (desktop mode only — no-op when VBZ_APP_SECRET is unset)
+if settings.app_secret:
+    app.add_middleware(AppSecretMiddleware, secret=settings.app_secret)
+    logger.info("AppSecretMiddleware enabled")
+else:
+    logger.info("AppSecretMiddleware disabled (VBZ_APP_SECRET not set)")
+
 # Configure CORS
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[
-        "http://localhost:8000",
-        "http://127.0.0.1:8000",
-        "http://localhost:3000",
-        "http://127.0.0.1:3000",
-        "http://frontend:3000",
-        "http://0.0.0.0:3000",
-    ],
+    allow_origins=settings.resolved_cors_allowed_origins,
     allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_methods=["GET", "POST", "OPTIONS"],
+    allow_headers=["Content-Type", "X-App-Secret"],
 )
 
 # Include routers
 app.include_router(transcription.router, prefix="/api")
+app.include_router(models.router, prefix="/api")
 
 
 @app.get("/health")

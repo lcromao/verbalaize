@@ -51,6 +51,27 @@ def test_websocket_rejects_unsupported_action(client):
     )
 
 
+def test_websocket_rejects_turbo_translation_configuration(client):
+    with client.websocket_connect("/api/v1/transcribe/realtime") as websocket:
+        websocket.send_text(
+            json.dumps(
+                {
+                    "type": "config",
+                    "model": "turbo",
+                    "action": "translate_english",
+                }
+            )
+        )
+        response = websocket.receive_json()
+
+    assert response["type"] == "error"
+    assert (
+        response["message"]
+        == "Invalid configuration: The 'turbo' model does not support "
+        "translation to English. Use the 'small' or 'medium' model instead."
+    )
+
+
 def test_websocket_transcribes_after_two_chunks(
     client, monkeypatch, sample_audio_bytes
 ):

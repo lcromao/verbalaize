@@ -32,6 +32,7 @@ MANIFEST
 #  before PyInstaller builds the exe, so as to inject date/other infos into it.
 *.manifest
 *.spec
+!pyinstaller/*.spec
 
 # Installer logs
 pip-log.txt
@@ -226,3 +227,7 @@ analysis_requirements.txt
 # Vite
 .vite/
 
+# Desktop / Tauri
+desktop/src-tauri/target/
+desktop/src-tauri/binaries/verbalaize-backend-*
+desktop/node_modules/

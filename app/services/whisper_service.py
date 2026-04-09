@@ -4,6 +4,7 @@ import os
 import tempfile
 import warnings
 from collections import defaultdict
+from pathlib import Path
 from typing import Any, Callable, Dict
 
 from fastapi import HTTPException, UploadFile
@@ -11,6 +12,7 @@ from fastapi import HTTPException, UploadFile
 from app.core.config import settings
 from app.schemas.transcription import (
     ActionType,
+    ModelAvailability,
     ModelType,
     TranscriptionResponse,
 )
@@ -49,8 +51,81 @@ class WhisperService:
             if torch is not None and torch.cuda.is_available()
             else "cpu"
         )
+        self._configure_runtime_environment()
         self._initialized = True
         logger.info(f"WhisperService initialized with device: {self.device}")
+
+    def _configure_runtime_environment(self) -> None:
+        if not settings.ffmpeg_bin_dir:
+            return
+
+        ffmpeg_dir = str(Path(settings.ffmpeg_bin_dir).expanduser().resolve())
+        existing_path = os.environ.get("PATH", "")
+        path_parts = existing_path.split(os.pathsep) if existing_path else []
+
+        if ffmpeg_dir not in path_parts:
+            os.environ["PATH"] = os.pathsep.join(
+                [ffmpeg_dir, existing_path] if existing_path else [ffmpeg_dir]
+            )
+            logger.info("Prepended FFmpeg directory to PATH: %s", ffmpeg_dir)
+
+    def validate_model_action(
+        self, model_type: ModelType, action: ActionType
+    ) -> None:
+        if (
+            action == ActionType.TRANSLATE_ENGLISH
+            and model_type == ModelType.TURBO
+        ):
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    "The 'turbo' model does not support translation to English. "
+                    "Use the 'small' or 'medium' model instead."
+                ),
+            )
+
+    def _model_download_path(self, model_type: ModelType) -> Path:
+        self._ensure_runtime_dependencies()
+        model_url = whisper._MODELS[model_type.value]
+        model_filename = os.path.basename(model_url)
+        cache_dir = Path(settings.whisper_model_cache_dir).expanduser()
+        return cache_dir / model_filename
+
+    def is_model_downloaded(self, model_type: ModelType) -> bool:
+        try:
+            download_path = self._model_download_path(model_type)
+        except HTTPException:
+            raise
+        except Exception:
+            return False
+
+        return download_path.is_file()
+
+    def list_model_availability(self) -> list[ModelAvailability]:
+        return [
+            ModelAvailability(
+                model=model_type,
+                installed=self.is_model_downloaded(model_type),
+            )
+            for model_type in ModelType
+        ]
+
+    async def prepare_model(
+        self,
+        model_type: ModelType,
+        on_stage_change: Callable[[str], None] | None = None,
+    ) -> None:
+        if on_stage_change is not None:
+            on_stage_change("checking_cache")
+
+        is_downloaded = self.is_model_downloaded(model_type)
+        if on_stage_change is not None:
+            on_stage_change("loading_model" if is_downloaded else "downloading")
+
+        await self._get_model(model_type)
+
+        if on_stage_change is not None:
+            on_stage_change("ready")
 
     def _ensure_runtime_dependencies(self):
         if whisper is None:
@@ -211,6 +286,7 @@ class WhisperService:
         action: ActionType,
         on_progress: Callable[[int, str], None] | None = None,
     ) -> TranscriptionResponse:
+        self.validate_model_action(model_type, action)
         file_extension = self._validate_audio_file(filename, content_type)
 
         if not file_path.endswith(file_extension) and filename:
@@ -316,6 +392,8 @@ class WhisperService:
         action: ActionType,
     ) -> str:
         """Transcribe real-time audio chunk"""
+
+        self.validate_model_action(model_type, action)
 
         logger.debug(f"Transcribing chunk of {len(audio_data)} bytes")
 

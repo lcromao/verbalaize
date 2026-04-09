@@ -19,7 +19,7 @@ export default defineConfig(({ mode }) => {
           target: apiProxyTarget,
           changeOrigin: true,
           secure: false,
-          rewrite: (path) => path.replace(/^\/api/, '/api')
+          ws: true,
         },
         '/health': {
           target: apiProxyTarget,

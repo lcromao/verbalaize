@@ -49,6 +49,34 @@ class RealtimeTranscriptionMessage(BaseModel):
     is_final_segment: Optional[bool] = False
 
 
+class ModelAvailability(BaseModel):
+    model: ModelType
+    installed: bool
+
+
+class ModelListResponse(BaseModel):
+    models: list[ModelAvailability]
+
+
+class ModelPreparationRequest(BaseModel):
+    model: ModelType
+
+
+class ModelPreparationJobAccepted(BaseModel):
+    job_id: str
+    status: str
+    stage: str
+    model: ModelType
+
+
+class ModelPreparationJobStatus(BaseModel):
+    job_id: str
+    status: str
+    stage: str
+    model: ModelType
+    error: str | None = None
+
+
 class ErrorResponse(BaseModel):
     error: str
     detail: Optional[str] = None

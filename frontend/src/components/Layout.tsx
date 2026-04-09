@@ -3,8 +3,11 @@ import { ModelSelector } from './ModelSelector';
 import { ActionSelector } from './ActionSelector';
 import { ThemeToggle } from './ThemeToggle';
 import { ApiStatus } from './ApiStatus';
+import { HistorySidebar } from './HistorySidebar';
+import { ModelManagerDialog } from './ModelManagerDialog';
+import { useDesktopSetup } from '@/hooks/useDesktopSetup';
 import { Button } from './ui/button';
-import { Mic, Upload } from 'lucide-react';
+import { Download, Mic, Upload } from 'lucide-react';
 
 interface LayoutProps {
   children: React.ReactNode;
@@ -12,60 +15,97 @@ interface LayoutProps {
 
 export const Layout = ({ children }: LayoutProps) => {
   const location = useLocation();
+  const { isDesktop, openManager } = useDesktopSetup();
 
   return (
-    <div className="min-h-screen bg-background">
+    <div className="h-screen flex flex-col overflow-hidden">
       {/* Header */}
-      <header className="border-b bg-card/50 backdrop-blur-sm sticky top-0 z-50">
-        <div className="container mx-auto px-4 py-4">
-          <div className="flex items-center justify-between">
-            <h1 className="text-2xl font-bold text-primary">
-              VerbalAIze
-            </h1>
-            
-            {/* Global Controls */}
-            <div className="flex items-center gap-4">
-              <ApiStatus />
-              <ModelSelector />
-              <ActionSelector />
-              <ThemeToggle />
+      <header className="border-b border-border/60 bg-background/80 backdrop-blur-md shrink-0 z-50">
+        <div className="px-6 h-14 flex items-center justify-between gap-4">
+          {/* Logo */}
+          <div className="flex items-center gap-2.5 shrink-0">
+            <div className="w-7 h-7 rounded-lg bg-primary flex items-center justify-center">
+              <Mic className="w-3.5 h-3.5 text-primary-foreground" />
             </div>
+            <span className="text-sm font-semibold tracking-tight">VerbalAIze</span>
+          </div>
+
+          {/* Controls */}
+          <div className="flex items-center gap-2">
+            <ModelSelector />
+            <ActionSelector />
+            <div className="w-px h-4 bg-border mx-1" />
+            {isDesktop && (
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={openManager}
+                className="h-7 gap-1.5 px-2 text-xs"
+              >
+                <Download className="h-3.5 w-3.5" />
+                Modelos
+              </Button>
+            )}
+            <ApiStatus />
+            <ThemeToggle />
           </div>
         </div>
       </header>
 
-      {/* Navigation */}
-      <nav className="border-b bg-muted/30">
-        <div className="container mx-auto px-4">
-          <div className="flex justify-center gap-1">
-            <Link to="/">
-              <Button 
-                variant={location.pathname === '/' ? 'default' : 'ghost'}
-                className="rounded-none border-b-2 border-transparent data-[active=true]:border-primary"
-                data-active={location.pathname === '/'}
-              >
-                <Upload className="w-4 h-4 mr-2" />
-                Upload & Transcrever
-              </Button>
-            </Link>
-            <Link to="/realtime">
-              <Button 
-                variant={location.pathname === '/realtime' ? 'default' : 'ghost'}
-                className="rounded-none border-b-2 border-transparent data-[active=true]:border-primary"
-                data-active={location.pathname === '/realtime'}
-              >
-                <Mic className="w-4 h-4 mr-2" />
-                Tempo Real
-              </Button>
-            </Link>
-          </div>
-        </div>
-      </nav>
+      {/* Body */}
+      <div className="flex flex-1 overflow-hidden relative">
+        {/* Sidebar */}
+        <HistorySidebar />
 
-      {/* Main Content */}
-      <main className="container mx-auto px-4 py-8">
-        {children}
-      </main>
+        {/* Right column */}
+        <div className="flex-1 flex flex-col overflow-hidden">
+          {/* Navigation */}
+          <nav className="border-b border-border/60 bg-background/60 backdrop-blur-sm shrink-0">
+            <div className="px-6 flex gap-0">
+              <NavLink to="/" active={location.pathname === '/'}>
+                <Upload className="w-3.5 h-3.5" />
+                Upload
+              </NavLink>
+              <NavLink to="/realtime" active={location.pathname === '/realtime'}>
+                <Mic className="w-3.5 h-3.5" />
+                Tempo Real
+              </NavLink>
+            </div>
+          </nav>
+
+          {/* Main Content */}
+          <main className="flex-1 overflow-y-auto">
+            <div className="max-w-3xl mx-auto px-6 py-10">
+              {children}
+            </div>
+          </main>
+        </div>
+      </div>
+
+      <ModelManagerDialog />
     </div>
   );
 };
+
+const NavLink = ({
+  to,
+  active,
+  children,
+}: {
+  to: string;
+  active: boolean;
+  children: React.ReactNode;
+}) => (
+  <Link
+    to={to}
+    className={`
+      flex items-center gap-1.5 px-4 py-3 text-sm font-medium border-b-2 transition-colors
+      ${active
+        ? 'border-primary text-foreground'
+        : 'border-transparent text-muted-foreground hover:text-foreground hover:border-border'
+      }
+    `}
+  >
+    {children}
+  </Link>
+);

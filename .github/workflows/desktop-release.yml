@@ -1,0 +1,93 @@
+name: Desktop Release
+
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - "desktop-v*"
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-latest
+            ffmpeg_bin_dir: /opt/homebrew/bin
+          - os: windows-latest
+            ffmpeg_bin_dir: C:\ProgramData\chocolatey\lib\ffmpeg\tools\ffmpeg\bin
+          - os: ubuntu-latest
+            ffmpeg_bin_dir: /usr/bin
+
+    runs-on: ${{ matrix.os }}
+
+    env:
+      FFMPEG_BIN_DIR: ${{ matrix.ffmpeg_bin_dir }}
+      APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+      APPLE_ID: ${{ secrets.APPLE_ID }}
+      APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+      APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+      TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+      TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+      WINDOWS_CERTIFICATE: ${{ secrets.WINDOWS_CERTIFICATE }}
+      WINDOWS_CERTIFICATE_PASSWORD: ${{ secrets.WINDOWS_CERTIFICATE_PASSWORD }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: Install Linux system dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            build-essential \
+            curl \
+            ffmpeg \
+            file \
+            libayatana-appindicator3-dev \
+            libgtk-3-dev \
+            libwebkit2gtk-4.1-dev \
+            librsvg2-dev \
+            patchelf
+
+      - name: Install macOS FFmpeg
+        if: runner.os == 'macOS'
+        run: brew install ffmpeg
+
+      - name: Install Windows FFmpeg
+        if: runner.os == 'Windows'
+        run: choco install ffmpeg -y
+
+      - name: Install backend build tooling
+        run: python -m pip install --upgrade pip pyinstaller -r app/requirements.txt
+
+      - name: Install frontend dependencies
+        run: npm --prefix frontend ci
+
+      - name: Install desktop dependencies
+        run: npm --prefix desktop install
+
+      - name: Build desktop application
+        run: npm --prefix desktop run build
+
+      - name: Upload desktop bundles
+        uses: actions/upload-artifact@v4
+        with:
+          name: verbalaize-${{ runner.os }}
+          path: |
+            desktop/src-tauri/target/release/bundle/**/*.dmg
+            desktop/src-tauri/target/release/bundle/**/*.app
+            desktop/src-tauri/target/release/bundle/**/*.msi
+            desktop/src-tauri/target/release/bundle/**/*.exe
+            desktop/src-tauri/target/release/bundle/**/*.AppImage
+            desktop/src-tauri/target/release/bundle/**/*.deb
