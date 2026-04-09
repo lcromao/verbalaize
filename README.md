@@ -207,6 +207,9 @@ Aceite minimo por entrega:
 ### Upload de arquivo
 
 ```
+### Upload de arquivo
+
+```
 POST /api/v1/transcribe/upload
 Content-Type: multipart/form-data
 
@@ -216,6 +219,9 @@ Campos:
   action          "transcribe" | "translate_english"
 ```
 
+### Transcricao em tempo real
+
+```
 ### Transcricao em tempo real
 
 ```
@@ -247,6 +253,7 @@ O modelo `turbo` e carregado no startup da aplicacao. Os demais sao carregados s
 ## Comandos uteis
 
 ### Frontend
+
 
 ```bash
 cd frontend
