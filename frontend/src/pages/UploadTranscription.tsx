@@ -1,21 +1,27 @@
-import { useState, useRef } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useTranscriptionStore } from '@/hooks/useTranscriptionStore';
+import { FfmpegInstallAlert } from '@/components/FfmpegInstallAlert';
+import { ProcessingStatus } from '@/components/ProcessingStatus';
 import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
 import { Textarea } from '@/components/ui/textarea';
-import { Progress } from '@/components/ui/progress';
 import { Upload, FileAudio, X, Loader2, Copy, Download, Trash2, Sparkles } from 'lucide-react';
 import { toast } from '@/hooks/use-toast';
 import { ApiService } from '@/services/api';
+import { isFfmpegMissingError } from '@/lib/transcriptionErrors';
+import { getStageLabel } from '@/lib/transcriptionProgress';
 
 const UploadTranscription = () => {
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
   const [isLoading, setIsLoading] = useState(false);
+  const [progress, setProgress] = useState<number>(0);
+  const [displayProgress, setDisplayProgress] = useState<number>(0);
+  const [stageLabel, setStageLabel] = useState<string>('');
   const [transcriptionResult, setTranscriptionResult] = useState('');
-  const [progress, setProgress] = useState(0);
+  const [ffmpegNotice, setFfmpegNotice] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   
-  const { model, action, targetLanguage } = useTranscriptionStore();
+  const { model, action } = useTranscriptionStore();
 
   const handleFileSelect = (event: React.ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0];
@@ -49,6 +55,7 @@ const UploadTranscription = () => {
       if (hasValidType || hasValidExtension) {
         setSelectedFile(file);
         setTranscriptionResult('');
+        setFfmpegNotice(null);
       } else {
         toast({
           title: "Formato não suportado",
@@ -75,6 +82,7 @@ const UploadTranscription = () => {
   const removeFile = () => {
     setSelectedFile(null);
     setTranscriptionResult('');
+    setFfmpegNotice(null);
     if (fileInputRef.current) {
       fileInputRef.current.value = '';
     }
@@ -84,45 +92,49 @@ const UploadTranscription = () => {
     if (!selectedFile) return;
 
     setIsLoading(true);
-    setProgress(0);
-    
-    // Simular progresso (substituir pela chamada real da API)
-    const progressInterval = setInterval(() => {
-      setProgress(prev => {
-        if (prev >= 90) {
-          clearInterval(progressInterval);
-          return prev;
-        }
-        return prev + Math.random() * 15;
-      });
-    }, 500);
+    setProgress(5);
+    setStageLabel('Na fila');
 
     try {
-      // Chamada real para o backend
-      const response = await ApiService.transcribeFile({
+      const job = await ApiService.startTranscriptionJob({
         file: selectedFile,
         model,
         action,
-        target_language: action === 'translate_language' ? targetLanguage : undefined,
       });
-      
-      clearInterval(progressInterval);
-      setProgress(100);
-      
-      // Exibir resultado real
-      setTranscriptionResult(response.text);
-      
+
+      setProgress(job.progress);
+      setStageLabel('Na fila');
+
+      while (true) {
+        await new Promise((resolve) => setTimeout(resolve, 250));
+        const status = await ApiService.getTranscriptionJobStatus(job.job_id);
+        setProgress(status.progress);
+        setStageLabel(getStageLabel(status.stage, status.action));
+
+        if (status.status === 'completed') {
+          setTranscriptionResult(status.text ?? '');
+          setFfmpegNotice(null);
+          break;
+        }
+
+        if (status.status === 'failed') {
+          throw new Error(status.error || 'Erro desconhecido');
+        }
+      }
+
       toast({
         title: "Transcrição concluída!",
         description: "O áudio foi processado com sucesso.",
       });
-      
     } catch (error) {
-      clearInterval(progressInterval);
       console.error('Transcription error:', error);
-      
+
       const errorMessage = error instanceof Error ? error.message : 'Erro desconhecido';
-      
+      if (isFfmpegMissingError(errorMessage)) {
+        setFfmpegNotice(errorMessage);
+        return;
+      }
+
       toast({
         title: "Erro na transcrição",
         description: errorMessage,
@@ -131,8 +143,44 @@ const UploadTranscription = () => {
     } finally {
       setIsLoading(false);
       setProgress(0);
+      setStageLabel('');
     }
   };
+
+  const operationLabel = action === 'translate_english' ? 'Tradução' : 'Transcrição';
+
+  useEffect(() => {
+    if (!isLoading) {
+      setDisplayProgress(progress);
+      return;
+    }
+
+    if (displayProgress === progress) {
+      return;
+    }
+
+    const intervalId = window.setInterval(() => {
+      setDisplayProgress((currentProgress) => {
+        if (currentProgress === progress) {
+          window.clearInterval(intervalId);
+          return currentProgress;
+        }
+
+        const remaining = progress - currentProgress;
+        const step = Math.max(1, Math.ceil(Math.abs(remaining) / 6));
+
+        if (remaining > 0) {
+          return Math.min(progress, currentProgress + step);
+        }
+
+        return Math.max(progress, currentProgress - step);
+      });
+    }, 60);
+
+    return () => {
+      window.clearInterval(intervalId);
+    };
+  }, [displayProgress, isLoading, progress]);
 
   return (
     <div className="max-w-4xl mx-auto space-y-6">
@@ -196,15 +244,17 @@ const UploadTranscription = () => {
           />
         </div>
 
-        {/* Progress Bar */}
+        {/* Backend processing state */}
         {isLoading && (
-          <div className="mt-6 space-y-2">
-            <div className="flex justify-between text-sm">
-              <span>Processando áudio...</span>
-              <span>{Math.round(progress)}%</span>
-            </div>
-            <Progress value={progress} className="w-full" />
-          </div>
+          <ProcessingStatus
+            title={`${operationLabel} em andamento`}
+            progress={displayProgress}
+            stageLabel={stageLabel}
+          />
+        )}
+
+        {ffmpegNotice && (
+          <FfmpegInstallAlert detail={ffmpegNotice} modeLabel="transcrição" />
         )}
 
         {/* Transcribe Button */}
@@ -219,10 +269,10 @@ const UploadTranscription = () => {
               {isLoading ? (
                 <>
                   <Loader2 className="w-4 h-4 mr-2 animate-spin" />
-                  Processando...
+                  {operationLabel}...
                 </>
               ) : (
-                `Transcrever com ${model.toUpperCase()}`
+                `${action === 'translate_english' ? 'Traduzir' : 'Transcrever'} com ${model.toUpperCase()}`
               )}
             </Button>
           </div>

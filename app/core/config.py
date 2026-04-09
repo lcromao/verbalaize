@@ -1,13 +1,22 @@
-from pydantic_settings import BaseSettings
+from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 class Settings(BaseSettings):
+    model_config = SettingsConfigDict(
+        env_prefix="VBZ_",
+        case_sensitive=False,
+        extra="ignore",
+    )
+
     app_name: str = "Verbalaize - Audio Transcription Service"
     app_version: str = "1.0.0"
     debug: bool = True
+    host: str = "127.0.0.1"
+    port: int = 8000
+    serve_frontend_dist: bool = False
 
     # Whisper configuration
-    whisper_model_cache_dir: str = "./whisper_models"
+    whisper_model_cache_dir: str = "./.whisper_models"
 
     # VerbAIze specific settings (speedup features)
     enable_speedup: bool = False

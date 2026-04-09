@@ -1,5 +1,7 @@
 import { useState, useRef, useEffect, useMemo } from 'react';
 import { useTranscriptionStore } from '@/hooks/useTranscriptionStore';
+import { FfmpegInstallAlert } from '@/components/FfmpegInstallAlert';
+import { ProcessingStatus } from '@/components/ProcessingStatus';
 import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
 import { Textarea } from '@/components/ui/textarea';
@@ -7,6 +9,7 @@ import { Badge } from '@/components/ui/badge';
 import { Mic, MicOff, Square, Play, Loader2 } from 'lucide-react';
 import { toast } from '@/hooks/use-toast';
 import { ApiService } from '@/services/api';
+import { isFfmpegMissingError } from '@/lib/transcriptionErrors';
 
 const RealTimeTranscription = () => {
   const [isRecording, setIsRecording] = useState(false);
@@ -14,13 +17,14 @@ const RealTimeTranscription = () => {
   const [segments, setSegments] = useState<string[]>([]);
   const [partialText, setPartialText] = useState('');
   const [recordingTime, setRecordingTime] = useState(0);
+  const [ffmpegNotice, setFfmpegNotice] = useState<string | null>(null);
   
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const websocketRef = useRef<WebSocket | null>(null);
   const audioStreamRef = useRef<MediaStream | null>(null);
   const timerRef = useRef<NodeJS.Timeout | null>(null);
   
-  const { model, action, targetLanguage } = useTranscriptionStore();
+  const { model, action } = useTranscriptionStore();
 
   // Combine segments and partial text for live display
   const liveText = useMemo(() => {
@@ -74,10 +78,7 @@ const RealTimeTranscription = () => {
       try {
         console.log('🔗 Iniciando conexão WebSocket...');
         
-        const wsProtocol = window.location.protocol === 'https:' ? 'wss' : 'ws';
-        const wsUrl = `${wsProtocol}://${window.location.host}/api/v1/transcribe/realtime`;
-        console.log('🌐 Creating WebSocket connection to:', wsUrl);
-        websocketRef.current = new WebSocket(wsUrl);
+        websocketRef.current = ApiService.createRealtimeWebSocket();
         
         // Track if config was acknowledged
         let configAcknowledged = false;
@@ -91,7 +92,6 @@ const RealTimeTranscription = () => {
             type: 'config',
             model,
             action,
-            target_language: action === 'translate_language' ? targetLanguage : null,
           };
           console.log('📤 Sending config:', config);
           
@@ -119,6 +119,7 @@ const RealTimeTranscription = () => {
               if (!configAcknowledged) {
                 configAcknowledged = true;
                 setIsConnected(true);
+                setFfmpegNotice(null);
                 toast({
                   title: "Conectado!",
                   description: "Conexão estabelecida com o servidor de transcrição.",
@@ -130,6 +131,12 @@ const RealTimeTranscription = () => {
             
             if (data.type === 'error') {
               console.error('❌ WebSocket error:', data.message);
+
+              if (isFfmpegMissingError(String(data.message))) {
+                setFfmpegNotice(data.message);
+                return;
+              }
+
               toast({
                 title: "Erro na transcrição",
                 description: data.message,
@@ -293,6 +300,7 @@ const RealTimeTranscription = () => {
       (mediaRecorder as MediaRecorder & { __sliceTimer?: NodeJS.Timeout }).__sliceTimer = sliceTimer;
       
       setIsRecording(true);
+      setFfmpegNotice(null);
       startTimer();
       
       toast({
@@ -410,7 +418,10 @@ const RealTimeTranscription = () => {
   const clearTranscription = () => {
     setSegments([]);
     setPartialText('');
+    setFfmpegNotice(null);
   };
+
+  const liveStatusTitle = isRecording ? 'Transcrição em andamento' : 'Aguardando áudio';
 
   const testWebSocketConnection = async () => {
     try {
@@ -505,6 +516,10 @@ const RealTimeTranscription = () => {
             </div>
           </div>
         </div>
+
+        {ffmpegNotice && (
+          <FfmpegInstallAlert detail={ffmpegNotice} modeLabel="tempo real" />
+        )}
       </Card>
 
       {/* Live Transcription */}
@@ -518,6 +533,10 @@ const RealTimeTranscription = () => {
             </div>
           )}
         </div>
+
+        <ProcessingStatus
+          title={liveStatusTitle}
+        />
         
         <Textarea
           value={liveText}

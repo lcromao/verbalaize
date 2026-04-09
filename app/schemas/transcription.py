@@ -13,20 +13,34 @@ class ModelType(str, Enum):
 class ActionType(str, Enum):
     TRANSCRIBE = "transcribe"
     TRANSLATE_ENGLISH = "translate_english"
-    TRANSLATE_LANGUAGE = "translate_language"
 
 
 class TranscriptionRequest(BaseModel):
     model: ModelType
     action: ActionType
-    target_language: Optional[str] = None
 
 
 class TranscriptionResponse(BaseModel):
     model: str
     action: str
     text: str
-    target_language: Optional[str] = None
+
+
+class TranscriptionJobAccepted(BaseModel):
+    job_id: str
+    status: str
+    progress: int
+
+
+class TranscriptionJobStatus(BaseModel):
+    job_id: str
+    status: str
+    progress: int
+    stage: str
+    model: str
+    action: str
+    text: str | None = None
+    error: str | None = None
 
 
 class RealtimeTranscriptionMessage(BaseModel):

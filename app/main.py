@@ -93,15 +93,17 @@ async def health_check():
 # Mount static files for frontend (after registering all API routes)
 static_files_path = Path(__file__).parent.parent / "frontend/dist"
 
-if static_files_path.exists():
+if settings.serve_frontend_dist and static_files_path.exists():
     logger.info(f"Serving frontend from: {static_files_path}")
     app.mount(
         "/",
         StaticFiles(directory=static_files_path, html=True),
         name="static",
     )
-else:
+elif settings.serve_frontend_dist:
     logger.warning(f"Frontend build not found at {static_files_path}")
+else:
+    logger.info("Static frontend serving disabled")
 
 
 if __name__ == "__main__":
@@ -109,8 +111,8 @@ if __name__ == "__main__":
 
     uvicorn.run(
         "app.main:app",
-        host="0.0.0.0",
-        port=8000,
+        host=settings.host,
+        port=settings.port,
         reload=settings.debug,
         reload_dirs=["app"],
     )
