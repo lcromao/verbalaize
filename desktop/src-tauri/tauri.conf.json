@@ -1,0 +1,26 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "Verbalaize",
+  "version": "0.1.0",
+  "identifier": "com.verbalaize.desktop",
+  "build": {
+    "devUrl": "http://127.0.0.1:3000",
+    "frontendDist": "../../frontend/dist"
+  },
+  "app": {
+    "windows": [],
+    "security": {
+      "csp": "default-src 'self'; connect-src 'self' http://127.0.0.1:* ws://127.0.0.1:* tauri://localhost http://tauri.localhost https://tauri.localhost"
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": "all",
+    "externalBin": [
+      "binaries/verbalaize-backend"
+    ],
+    "resources": [
+      "resources/ffmpeg/**/*"
+    ]
+  }
+}

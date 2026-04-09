@@ -1,0 +1,21 @@
+{
+  "name": "verbalaize-desktop",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "frontend:dev": "npm --prefix ../frontend run dev -- --host 127.0.0.1 --port 3000",
+    "frontend:build": "npm --prefix ../frontend run build",
+    "prepare:sidecar": "python scripts/build_sidecar.py",
+    "prepare:ffmpeg": "python scripts/stage_ffmpeg.py",
+    "tauri:dev": "tauri dev --config src-tauri/tauri.conf.json",
+    "tauri:build": "tauri build --config src-tauri/tauri.conf.json",
+    "dev": "concurrently -k \"npm:frontend:dev\" \"wait-on tcp:127.0.0.1:3000 && npm run prepare:sidecar && npm run prepare:ffmpeg && npm run tauri:dev\"",
+    "build": "npm run frontend:build && npm run prepare:sidecar && npm run prepare:ffmpeg && npm run tauri:build"
+  },
+  "devDependencies": {
+    "@tauri-apps/cli": "2.8.4",
+    "concurrently": "9.1.2",
+    "wait-on": "8.0.3"
+  }
+}

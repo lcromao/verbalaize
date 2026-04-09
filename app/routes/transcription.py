@@ -343,6 +343,11 @@ async def _handle_text_message(
                     "transcribe, translate_english"
                 ) from exc
 
+            whisper_service.validate_model_action(
+                config_state["model_type"],
+                config_state["action"],
+            )
+
             logger.info(
                 "Configuration updated for %s: model=%s, action=%s",
                 client_id,
@@ -390,6 +395,15 @@ async def _handle_text_message(
                 {
                     "type": "error",
                     "message": f"Invalid configuration: {str(e)}",
+                }
+            )
+    except HTTPException as e:
+        logger.error(f"Unsupported configuration from {client_id}: {e.detail}")
+        if websocket.client_state == WebSocketState.CONNECTED:
+            await websocket.send_json(
+                {
+                    "type": "error",
+                    "message": f"Invalid configuration: {e.detail}",
                 }
             )
 

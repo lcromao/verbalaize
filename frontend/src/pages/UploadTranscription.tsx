@@ -12,19 +12,20 @@ import { ApiService } from '@/services/api';
 import { isFfmpegMissingError } from '@/lib/transcriptionErrors';
 import { getStageLabel } from '@/lib/transcriptionProgress';
 
+const JOB_POLL_INTERVAL_MS = 750;
+
 const UploadTranscription = () => {
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
   const [isDragging, setIsDragging] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
   const [progress, setProgress] = useState<number>(0);
-  const [displayProgress, setDisplayProgress] = useState<number>(0);
   const [stageLabel, setStageLabel] = useState<string>('');
   const [transcriptionResult, setTranscriptionResult] = useState('');
   const [ffmpegNotice, setFfmpegNotice] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
-  const { model, action, targetLanguage } = useTranscriptionStore();
-  const { entries, selectedId, addEntry, selectEntry } = useHistoryStore();
+  const { model, action } = useTranscriptionStore();
+  const { entries, selectedId, addEntry } = useHistoryStore();
 
   // Load selected history entry or reset on new session
   useEffect(() => {
@@ -39,7 +40,7 @@ const UploadTranscription = () => {
     if (entry) {
       setTranscriptionResult(entry.text);
     }
-  }, [selectedId]);
+  }, [entries, selectedId]);
 
   const validTypes = [
     'audio/mpeg', 'audio/mp3',
@@ -69,6 +70,9 @@ const UploadTranscription = () => {
     if (hasValidType || hasValidExtension) {
       setSelectedFile(file);
       setTranscriptionResult('');
+      setFfmpegNotice(null);
+      setProgress(0);
+      setStageLabel('');
     } else {
       toast({
         title: 'Formato não suportado',
@@ -100,7 +104,33 @@ const UploadTranscription = () => {
   const removeFile = () => {
     setSelectedFile(null);
     setTranscriptionResult('');
+    setFfmpegNotice(null);
+    setProgress(0);
+    setStageLabel('');
     if (fileInputRef.current) fileInputRef.current.value = '';
+  };
+
+  const pollTranscriptionJob = async (jobId: string) => {
+    while (true) {
+      const status = await ApiService.getTranscriptionJobStatus(jobId);
+
+      setProgress(status.progress);
+      setStageLabel(getStageLabel(status.stage, status.action));
+
+      if (status.status === 'completed') {
+        if (!status.text) {
+          throw new Error('A transcrição foi concluída sem conteúdo retornado.');
+        }
+
+        return status;
+      }
+
+      if (status.status === 'failed') {
+        throw new Error(status.error || 'Transcription failed');
+      }
+
+      await new Promise((resolve) => window.setTimeout(resolve, JOB_POLL_INTERVAL_MS));
+    }
   };
 
   const transcribeFile = async () => {
@@ -108,33 +138,28 @@ const UploadTranscription = () => {
 
     setIsLoading(true);
     setProgress(0);
-
-    const progressInterval = setInterval(() => {
-      setProgress(prev => {
-        if (prev >= 90) {
-          clearInterval(progressInterval);
-          return prev;
-        }
-        return prev + Math.random() * 15;
-      });
-    }, 500);
+    setStageLabel(getStageLabel('queued', action));
+    setFfmpegNotice(null);
 
     try {
-      const response = await ApiService.transcribeFile({
+      const job = await ApiService.startTranscriptionJob({
         file: selectedFile,
         model,
         action,
-        target_language: action === 'translate_language' ? targetLanguage : undefined,
       });
+      setProgress(job.progress);
+      setStageLabel(getStageLabel(job.status, action));
 
-      clearInterval(progressInterval);
+      const response = await pollTranscriptionJob(job.job_id);
+
       setProgress(100);
-      setTranscriptionResult(response.text);
+      setStageLabel(getStageLabel('completed', response.action));
+      setTranscriptionResult(response.text ?? '');
 
-      const title = selectedFile.name || response.text.slice(0, 50);
+      const title = selectedFile.name || (response.text ?? '').slice(0, 50);
       addEntry({
         title,
-        text: response.text,
+        text: response.text ?? '',
         type: 'upload',
         model,
         action,
@@ -146,8 +171,8 @@ const UploadTranscription = () => {
         description: 'O áudio foi processado com sucesso.',
       });
     } catch (error) {
-      clearInterval(progressInterval);
       const errorMessage = error instanceof Error ? error.message : 'Erro desconhecido';
+      setFfmpegNotice(isFfmpegMissingError(errorMessage) ? errorMessage : null);
       toast({
         title: 'Erro na transcrição',
         description: errorMessage,
@@ -155,10 +180,18 @@ const UploadTranscription = () => {
       });
     } finally {
       setIsLoading(false);
-      setProgress(0);
       setStageLabel('');
     }
   };
+
+  const processingTitle =
+    action === 'translate_english' ? 'Traduzindo áudio' : 'Transcrevendo áudio';
+  const submitLabel =
+    action === 'translate_english'
+      ? `Traduzir com ${model.toUpperCase()}`
+      : `Transcrever com ${model.toUpperCase()}`;
+  const ffmpegModeLabel =
+    action === 'translate_english' ? 'modo de tradução' : 'modo de transcrição';
 
   const copyText = () => {
     navigator.clipboard.writeText(transcriptionResult);
@@ -253,10 +286,11 @@ const UploadTranscription = () => {
       {/* Progress */}
       {isLoading && (
         <div className="space-y-2">
-          <div className="flex justify-between text-xs text-muted-foreground">
-            <span>Processando áudio...</span>
-            <span>{Math.round(progress)}%</span>
-          </div>
+          <ProcessingStatus
+            title={processingTitle}
+            progress={Math.round(progress)}
+            stageLabel={stageLabel}
+          />
           <Progress value={progress} className="h-1" />
         </div>
       )}
@@ -275,9 +309,16 @@ const UploadTranscription = () => {
               Processando...
             </>
           ) : (
-            `Transcrever com ${model.toUpperCase()}`
+            submitLabel
           )}
         </Button>
+      )}
+
+      {ffmpegNotice && (
+        <FfmpegInstallAlert
+          detail={ffmpegNotice}
+          modeLabel={ffmpegModeLabel}
+        />
       )}
 
       {/* Results */}

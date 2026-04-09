@@ -4,7 +4,10 @@ import { ActionSelector } from './ActionSelector';
 import { ThemeToggle } from './ThemeToggle';
 import { ApiStatus } from './ApiStatus';
 import { HistorySidebar } from './HistorySidebar';
-import { Mic, Upload } from 'lucide-react';
+import { ModelManagerDialog } from './ModelManagerDialog';
+import { useDesktopSetup } from '@/hooks/useDesktopSetup';
+import { Button } from './ui/button';
+import { Download, Mic, Upload } from 'lucide-react';
 
 interface LayoutProps {
   children: React.ReactNode;
@@ -12,6 +15,7 @@ interface LayoutProps {
 
 export const Layout = ({ children }: LayoutProps) => {
   const location = useLocation();
+  const { isDesktop, openManager } = useDesktopSetup();
 
   return (
     <div className="h-screen flex flex-col overflow-hidden">
@@ -31,6 +35,17 @@ export const Layout = ({ children }: LayoutProps) => {
             <ModelSelector />
             <ActionSelector />
             <div className="w-px h-4 bg-border mx-1" />
+            {isDesktop && (
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={openManager}
+                className="h-7 gap-1.5 px-2 text-xs"
+              >
+                <Download className="h-3.5 w-3.5" />
+                Modelos
+              </Button>
+            )}
             <ApiStatus />
             <ThemeToggle />
           </div>
@@ -66,6 +81,8 @@ export const Layout = ({ children }: LayoutProps) => {
           </main>
         </div>
       </div>
+
+      <ModelManagerDialog />
     </div>
   );
 };

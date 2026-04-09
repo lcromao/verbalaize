@@ -1,0 +1,17 @@
+[package]
+name = "verbalaize-desktop"
+version = "0.1.0"
+description = "Verbalaize desktop host"
+edition = "2021"
+build = "build.rs"
+
+[build-dependencies]
+tauri-build = { version = "2.5.6", features = [] }
+
+[dependencies]
+reqwest = { version = "0.12.12", default-features = false, features = ["blocking", "rustls-tls"] }
+rfd = "0.15.2"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+tauri = { version = "2.10.3", features = [] }
+uuid = { version = "1.12.1", features = ["v4"] }

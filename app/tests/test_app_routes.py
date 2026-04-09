@@ -1,3 +1,8 @@
+import asyncio
+
+from app.main import lifespan
+
+
 def test_api_root_endpoint(client):
     response = client.get("/api")
 
@@ -23,3 +28,23 @@ def test_unknown_route_is_not_mapped_to_frontend_dist(client):
     response = client.get("/rota-inexistente")
 
     assert response.status_code == 404
+
+
+def test_lifespan_skips_model_preload_when_disabled(monkeypatch):
+    called = False
+
+    async def fake_get_model(_model_type):
+        nonlocal called
+        called = True
+        return object()
+
+    monkeypatch.setattr("app.main.settings.disable_startup_preload", True)
+    monkeypatch.setattr("app.main.get_whisper_service", lambda: type("S", (), {"_get_model": fake_get_model})())
+
+    async def run_lifespan():
+        async with lifespan(None):
+            return None
+
+    asyncio.run(run_lifespan())
+
+    assert called is False

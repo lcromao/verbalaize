@@ -111,3 +111,28 @@ def test_transcribe_realtime_chunk_ignores_tiny_audio():
     )
 
     assert result == ""
+
+
+def test_validate_model_action_rejects_turbo_translation():
+    service = WhisperService()
+
+    with pytest.raises(HTTPException) as exc_info:
+        service.validate_model_action(
+            ModelType.TURBO,
+            ActionType.TRANSLATE_ENGLISH,
+        )
+
+    assert exc_info.value.status_code == 400
+    assert "does not support translation to English" in exc_info.value.detail
+
+
+def test_configure_runtime_environment_prepends_ffmpeg_dir(monkeypatch, tmp_path):
+    service = WhisperService()
+    ffmpeg_dir = str(tmp_path)
+
+    monkeypatch.setattr("app.services.whisper_service.settings.ffmpeg_bin_dir", ffmpeg_dir)
+    monkeypatch.setenv("PATH", "/usr/bin")
+
+    service._configure_runtime_environment()
+
+    assert os.environ["PATH"].split(os.pathsep)[0] == ffmpeg_dir

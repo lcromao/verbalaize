@@ -1,18 +1,25 @@
 import { WhisperModel, TranscriptionAction } from '@/hooks/useTranscriptionStore';
+import { getDesktopRuntime } from '@/lib/desktopRuntime';
+
+const desktopRuntime = getDesktopRuntime();
 
 // Resolve API base URL:
 // - Prefer VITE_API_URL when provided at build time
 // - Otherwise use the current page origin (same-origin requests avoid CORS/mismatch localhost vs 127.0.0.1)
-const API_BASE_URL = (import.meta.env.VITE_API_URL && import.meta.env.VITE_API_URL.trim())
+const API_BASE_URL = desktopRuntime
+  ? desktopRuntime.apiBaseUrl
+  : (import.meta.env.VITE_API_URL && import.meta.env.VITE_API_URL.trim())
   ? import.meta.env.VITE_API_URL.trim()
   : window.location.origin;
 
 // Derive WS base URL from current location to avoid mixed origin issues
-const WS_BASE_URL = `${window.location.protocol === 'https:' ? 'wss' : 'ws'}://${window.location.host}`;
+const WS_BASE_URL = desktopRuntime
+  ? desktopRuntime.wsBaseUrl
+  : `${window.location.protocol === 'https:' ? 'wss' : 'ws'}://${window.location.host}`;
 
-// Desktop mode: Tauri injects VITE_APP_SECRET at launch via the sidecar env pipeline.
+// Desktop mode: Tauri injects runtime config before the app loads.
 // In web / Docker mode this is undefined and no header is sent.
-const APP_SECRET: string | undefined = import.meta.env.VITE_APP_SECRET || undefined;
+const APP_SECRET: string | undefined = desktopRuntime?.secret || import.meta.env.VITE_APP_SECRET || undefined;
 
 /** Returns the X-App-Secret header when running in desktop mode. */
 function secretHeaders(): Record<string, string> {
@@ -50,11 +57,34 @@ export interface TranscriptionJobStatus {
   error?: string | null;
 }
 
+export interface ModelAvailabilityResponse {
+  model: WhisperModel;
+  installed: boolean;
+}
+
+export interface ModelListResponse {
+  models: ModelAvailabilityResponse[];
+}
+
+export interface ModelPreparationJobAccepted {
+  job_id: string;
+  status: 'queued' | 'processing' | 'completed' | 'failed';
+  stage: string;
+  model: WhisperModel;
+}
+
+export interface ModelPreparationJobStatus {
+  job_id: string;
+  status: 'queued' | 'processing' | 'completed' | 'failed';
+  stage: string;
+  model: WhisperModel;
+  error?: string | null;
+}
+
 export interface TranscriptionRequest {
   file: File;
   model: WhisperModel;
   action: TranscriptionAction;
-  target_language?: string;
 }
 
 export class ApiService {
@@ -93,14 +123,55 @@ export class ApiService {
     return response.json();
   }
 
+  static async listModels(): Promise<ModelListResponse> {
+    const response = await fetch(`${API_BASE_URL}/api/v1/models`, {
+      headers: secretHeaders(),
+    });
+
+    if (!response.ok) {
+      const errorData = await response.json().catch(() => ({ detail: 'Unknown error' }));
+      throw new Error(errorData.detail || `HTTP ${response.status}: ${response.statusText}`);
+    }
+
+    return response.json();
+  }
+
+  static async prepareModel(model: WhisperModel): Promise<ModelPreparationJobAccepted> {
+    const response = await fetch(`${API_BASE_URL}/api/v1/models/prepare`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        ...secretHeaders(),
+      },
+      body: JSON.stringify({ model }),
+    });
+
+    if (!response.ok) {
+      const errorData = await response.json().catch(() => ({ detail: 'Unknown error' }));
+      throw new Error(errorData.detail || `HTTP ${response.status}: ${response.statusText}`);
+    }
+
+    return response.json();
+  }
+
+  static async getModelPreparationJobStatus(jobId: string): Promise<ModelPreparationJobStatus> {
+    const response = await fetch(`${API_BASE_URL}/api/v1/models/jobs/${jobId}`, {
+      headers: secretHeaders(),
+    });
+
+    if (!response.ok) {
+      const errorData = await response.json().catch(() => ({ detail: 'Unknown error' }));
+      throw new Error(errorData.detail || `HTTP ${response.status}: ${response.statusText}`);
+    }
+
+    return response.json();
+  }
+
   static async transcribeFile(request: TranscriptionRequest): Promise<TranscriptionResponse> {
     const formData = new FormData();
     formData.append('file', request.file);
     formData.append('model', request.model);
     formData.append('action', request.action);
-    if (request.target_language) {
-      formData.append('target_language', request.target_language);
-    }
 
     const response = await fetch(`${API_BASE_URL}/api/v1/transcribe/upload`, {
       method: 'POST',

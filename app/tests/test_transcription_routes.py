@@ -74,7 +74,7 @@ def test_transcription_upload_wraps_unexpected_errors(
     )
 
     assert response.status_code == 500
-    assert response.json()["detail"] == "boom"
+    assert response.json()["detail"] == "Transcription failed"
 
 
 def test_transcription_upload_start_returns_job_id(client, sample_audio_file):

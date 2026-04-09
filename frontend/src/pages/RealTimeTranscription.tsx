@@ -1,10 +1,12 @@
 import { useState, useRef, useEffect, useMemo } from 'react';
-import { useTranscriptionStore } from '@/hooks/useTranscriptionStore';
+import { WhisperModel, useTranscriptionStore } from '@/hooks/useTranscriptionStore';
+import { useHistoryStore } from '@/hooks/useHistoryStore';
 import { Button } from '@/components/ui/button';
 import { Textarea } from '@/components/ui/textarea';
 import { Mic, MicOff, Square, Loader2, Copy, Trash2 } from 'lucide-react';
 import { toast } from '@/hooks/use-toast';
 import { ApiService } from '@/services/api';
+import { getPreferredModelForAction } from '@/lib/modelCatalog';
 
 const RealTimeTranscription = () => {
   const [isRecording, setIsRecording] = useState(false);
@@ -17,13 +19,52 @@ const RealTimeTranscription = () => {
   const websocketRef = useRef<WebSocket | null>(null);
   const audioStreamRef = useRef<MediaStream | null>(null);
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const segmentsRef = useRef<string[]>([]);
+  const partialTextRef = useRef('');
+  const activeModelRef = useRef<WhisperModel>('turbo');
 
   const { model, action } = useTranscriptionStore();
-  const [, setFfmpegNotice] = useState<string | null>(null);
+  const { entries, selectedId, addEntry, selectEntry } = useHistoryStore();
+
+  const updateSegments = (
+    next:
+      | string[]
+      | ((previous: string[]) => string[]),
+  ) => {
+    setSegments((previous) => {
+      const resolved =
+        typeof next === 'function'
+          ? next(previous)
+          : next;
+      segmentsRef.current = resolved;
+      return resolved;
+    });
+  };
+
+  const updatePartialText = (next: string) => {
+    partialTextRef.current = next;
+    setPartialText(next);
+  };
 
   const liveText = useMemo(() => {
     return [...segments, partialText].filter(t => t.trim()).join(' ');
   }, [segments, partialText]);
+
+  useEffect(() => {
+    if (isRecording) return;
+
+    if (!selectedId) {
+      updateSegments([]);
+      updatePartialText('');
+      return;
+    }
+
+    const entry = entries.find((item) => item.id === selectedId && item.type === 'realtime');
+    if (!entry) return;
+
+    updateSegments(entry.text ? [entry.text] : []);
+    updatePartialText('');
+  }, [entries, isRecording, selectedId]);
 
   useEffect(() => {
     return () => {
@@ -37,6 +78,12 @@ const RealTimeTranscription = () => {
       }
     };
   }, []);
+
+  const getCurrentTranscript = () => {
+    return [...segmentsRef.current, partialTextRef.current]
+      .filter(text => text.trim())
+      .join(' ');
+  };
 
   const startTimer = () => {
     timerRef.current = setInterval(() => {
@@ -58,27 +105,47 @@ const RealTimeTranscription = () => {
     return `${m}:${s}`;
   };
 
-  const connectWebSocket = () => {
+  const connectWebSocket = (resolvedModel: typeof model) => {
     return new Promise((resolve, reject) => {
+      let configAcknowledged = false;
+      let settled = false;
+      let timeoutId: ReturnType<typeof setTimeout> | null = null;
+
+      const rejectConnection = (error: unknown) => {
+        if (settled) return;
+        settled = true;
+        if (timeoutId) {
+          clearTimeout(timeoutId);
+        }
+        reject(error instanceof Error ? error : new Error('WebSocket connection failed'));
+      };
+
+      const resolveConnection = () => {
+        if (settled) return;
+        settled = true;
+        if (timeoutId) {
+          clearTimeout(timeoutId);
+        }
+        resolve(true);
+      };
+
       try {
         websocketRef.current = ApiService.createRealtimeWebSocket();
-
-        let configAcknowledged = false;
 
         websocketRef.current.onopen = () => {
           const config = {
             type: 'config',
-            model,
+            model: resolvedModel,
             action,
           };
           if (websocketRef.current?.readyState === WebSocket.OPEN) {
             try {
               websocketRef.current.send(JSON.stringify(config));
             } catch (error) {
-              reject(error);
+              rejectConnection(error);
             }
           } else {
-            reject(new Error('WebSocket not ready'));
+            rejectConnection(new Error('WebSocket not ready'));
           }
         };
 
@@ -91,29 +158,33 @@ const RealTimeTranscription = () => {
                 configAcknowledged = true;
                 setIsConnected(true);
                 toast({ title: 'Conectado ao servidor de transcrição' });
-                resolve(true);
+                resolveConnection();
               }
               return;
             }
 
             if (data.type === 'error') {
               toast({ title: 'Erro na transcrição', description: data.message, variant: 'destructive' });
+              if (!configAcknowledged) {
+                websocketRef.current?.close();
+                rejectConnection(new Error(data.message || 'Invalid realtime configuration'));
+              }
               return;
             }
 
             if (data.text) {
               if (data.is_final_segment) {
-                setSegments(prev => [...prev, data.text]);
-                setPartialText('');
+                updateSegments(prev => [...prev, data.text]);
+                updatePartialText('');
               } else if (data.is_partial) {
-                setPartialText(data.text);
+                updatePartialText(data.text);
               } else {
-                setSegments(prev => {
+                updateSegments(prev => {
                   const last = prev[prev.length - 1] || '';
                   if (last.endsWith(data.text.trim())) return prev;
                   return [...prev, data.text];
                 });
-                setPartialText('');
+                updatePartialText('');
               }
             }
           } catch {
@@ -123,28 +194,48 @@ const RealTimeTranscription = () => {
 
         websocketRef.current.onclose = () => {
           setIsConnected(false);
+          if (!configAcknowledged) {
+            rejectConnection(new Error('Connection closed before configuration was acknowledged'));
+          }
         };
 
         websocketRef.current.onerror = error => {
           toast({ title: 'Erro de conexão', description: 'Não foi possível conectar.', variant: 'destructive' });
-          reject(error);
+          rejectConnection(error);
         };
 
-        setTimeout(() => {
+        timeoutId = setTimeout(() => {
           if (!configAcknowledged) {
             websocketRef.current?.close();
-            reject(new Error('Configuration timeout'));
+            rejectConnection(new Error('Configuration timeout'));
           }
         }, 10000);
       } catch (error) {
         toast({ title: 'Erro de conexão', variant: 'destructive' });
-        reject(error);
+        rejectConnection(error);
       }
     });
   };
 
   const startRecording = async () => {
     try {
+      const resolvedModel = getPreferredModelForAction(
+        action,
+        ['small', 'medium', 'turbo'],
+      );
+      if (!resolvedModel) {
+        toast({
+          title: 'Modelo incompatível',
+          description: 'Selecione um modelo compatível com a ação escolhida.',
+          variant: 'destructive',
+        });
+        return;
+      }
+
+      selectEntry(null);
+      updateSegments([]);
+      updatePartialText('');
+
       const stream = await navigator.mediaDevices.getUserMedia({
         audio: { sampleRate: 16000, channelCount: 1, echoCancellation: true, noiseSuppression: true },
       });
@@ -171,7 +262,8 @@ const RealTimeTranscription = () => {
         }
       };
 
-      await connectWebSocket();
+      await connectWebSocket(resolvedModel);
+      activeModelRef.current = resolvedModel;
 
       mediaRecorder.start();
 
@@ -195,12 +287,20 @@ const RealTimeTranscription = () => {
       (mediaRecorder as MediaRecorder & { __sliceTimer?: ReturnType<typeof setTimeout> }).__sliceTimer = sliceTimer;
 
       setIsRecording(true);
-      setFfmpegNotice(null);
       startTimer();
 
       toast({ title: 'Gravação iniciada', description: 'Fale próximo ao microfone.' });
-    } catch {
-      toast({ title: 'Erro no microfone', description: 'Verifique as permissões.', variant: 'destructive' });
+    } catch (error) {
+      const description =
+        error instanceof Error && error.message
+          ? error.message
+          : 'Verifique as permissões do microfone e a conexão com o backend.';
+
+      toast({
+        title: 'Erro ao iniciar gravação',
+        description,
+        variant: 'destructive',
+      });
       if (audioStreamRef.current)
         audioStreamRef.current.getTracks().forEach(t => t.stop());
     }
@@ -229,8 +329,6 @@ const RealTimeTranscription = () => {
           const ws = websocketRef.current;
           if (!ws) { resolve(); return; }
 
-          let timeoutId: ReturnType<typeof setTimeout>;
-
           const flushHandler = (event: MessageEvent) => {
             try {
               const data = JSON.parse(event.data);
@@ -239,10 +337,6 @@ const RealTimeTranscription = () => {
                 clearTimeout(timeoutId);
                 resolve();
               }
-              if (data.text && data.is_final_segment) {
-                setSegments(prev => [...prev, data.text]);
-                setPartialText('');
-              }
             } catch {
               ws.removeEventListener('message', flushHandler);
               clearTimeout(timeoutId);
@@ -250,7 +344,7 @@ const RealTimeTranscription = () => {
             }
           };
 
-          timeoutId = setTimeout(() => {
+          const timeoutId = setTimeout(() => {
             ws.removeEventListener('message', flushHandler);
             resolve();
           }, 10000);
@@ -266,13 +360,24 @@ const RealTimeTranscription = () => {
       setIsConnected(false);
     }
 
+    const finalTranscript = getCurrentTranscript();
+    if (finalTranscript) {
+      addEntry({
+        title: finalTranscript.slice(0, 80),
+        text: finalTranscript,
+        type: 'realtime',
+        model: activeModelRef.current,
+        action,
+      });
+    }
+
     toast({ title: 'Gravação finalizada' });
   };
 
   const clearTranscription = () => {
-    setSegments([]);
-    setPartialText('');
-    setFfmpegNotice(null);
+    selectEntry(null);
+    updateSegments([]);
+    updatePartialText('');
   };
 
   return (
@@ -288,23 +393,32 @@ const RealTimeTranscription = () => {
       {/* Recording Control */}
       <div className="flex flex-col items-center gap-6 py-6">
         {/* Mic Button */}
-        <button
-          onClick={isRecording ? stopRecording : startRecording}
-          className={`
-            relative w-20 h-20 rounded-full flex items-center justify-center transition-all duration-300 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2
-            ${isRecording
-              ? 'bg-destructive text-destructive-foreground animate-recording shadow-lg shadow-destructive/30'
-              : 'bg-primary text-primary-foreground hover:opacity-90 shadow-md shadow-primary/20'
-            }
-          `}
-          aria-label={isRecording ? 'Parar gravação' : 'Iniciar gravação'}
-        >
-          {isRecording ? (
-            <Square className="w-7 h-7 fill-current" />
-          ) : (
-            <Mic className="w-7 h-7" />
+        <div className="relative flex items-center justify-center">
+          {/* Outer animated rings when recording */}
+          {isRecording && (
+            <>
+              <span className="absolute w-24 h-24 rounded-full bg-destructive/20 animate-ping" />
+              <span className="absolute w-28 h-28 rounded-full border-2 border-destructive/30 animate-pulse" />
+            </>
           )}
-        </button>
+          <button
+            onClick={isRecording ? stopRecording : startRecording}
+            className={`
+              relative z-10 w-20 h-20 rounded-full flex items-center justify-center transition-all duration-300 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2
+              ${isRecording
+                ? 'bg-destructive text-destructive-foreground animate-recording shadow-lg shadow-destructive/40 scale-110'
+                : 'bg-primary text-primary-foreground hover:opacity-90 hover:scale-105 shadow-md shadow-primary/20'
+              }
+            `}
+            aria-label={isRecording ? 'Parar gravação' : 'Iniciar gravação'}
+          >
+            {isRecording ? (
+              <Square className="w-7 h-7 fill-current" />
+            ) : (
+              <Mic className="w-7 h-7" />
+            )}
+          </button>
+        </div>
 
         {/* Status Row */}
         <div className="flex items-center gap-3 text-sm">
@@ -378,8 +492,8 @@ const RealTimeTranscription = () => {
           onChange={e => {
             if (!isRecording) {
               const text = e.target.value;
-              setSegments(text ? [text] : []);
-              setPartialText('');
+              updateSegments(text ? [text] : []);
+              updatePartialText('');
             }
           }}
           placeholder="A transcrição aparecerá aqui conforme você fala..."
